@@ -12,7 +12,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Textarea URL tidak di-trim otomatis supaya nomor baris pada pesan error tetap sesuai input
+        $middleware->trimStrings(except: ['urls']);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

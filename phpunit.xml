@@ -32,5 +32,12 @@
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <env name="LOG_CHANNEL" value="null"/>
+        <!-- Test tidak pernah menjalankan tool scanner atau AI sungguhan -->
+        <env name="NUCLEI_PATH" value=""/>
+        <env name="TESTSSL_PATH" value=""/>
+        <env name="WHATWEB_PATH" value=""/>
+        <env name="NMAP_PATH" value=""/>
+        <env name="AI_ENABLED" value="false"/>
     </php>
 </phpunit>

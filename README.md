@@ -1,58 +1,107 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# SIPRIKA
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Sistem Penilaian Risiko Keamanan Aplikasi. SIPRIKA memeriksa keamanan dasar website secara otomatis dan non-eksploitatif, lalu menyusun temuan menjadi Risk Register sesuai template Excel (sheet Perangkat Lunak).
 
-## About Laravel
-
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
-
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
-
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
-
-## Learning Laravel
-
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
-
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
-
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
-
-## Agentic Development
-
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
-
-```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+```
+Website → Scanner → Observation → Finding + Evidence → AI (opsional) → Risk Engine → Risk Register → Excel
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Spesifikasi lengkap ada di [docs/blueprint.md](docs/blueprint.md). Bagian "Catatan Pengembangan" di awal dokumen berisi keputusan yang berlaku saat ini.
 
-## Contributing
+## Fitur
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+- Input satu atau banyak website, satu per baris. Boleh tanpa `https://`, contoh `e-sakip.jemberkab.go.id`.
+- Dua mode:
+  - **Cepat** (maksimal 10 menit per website): DNS, HTTP, security headers, cookie, TLS dasar, teknologi, exposure terbatas, Nuclei profil ringan.
+  - **Standar**: semua pemeriksaan Cepat, ditambah exposure lengkap, Nmap, Nuclei termasuk CVE, testssl.sh, dan WhatWeb.
+- Antrean: website diperiksa satu per satu. Setiap website punya loading bar dengan persentase dan nama tahap yang sedang berjalan, diperbarui otomatis tanpa reload.
+- Hasil per website ditampilkan dalam lima tab: Overview, Security Check, Findings, Risk Register, dan Coverage.
+- Risk Register tampil di web dengan tata letak sheet Perangkat Lunak pada template (judul, header, dan kolom A sampai AA), per website maupun gabungan satu batch. Isinya sama persis dengan file Excel hasil export.
+- Risk Engine memakai katalog finding dan matriks risiko dari template (config, bukan kode).
+- AI lokal (qwen2.5 lewat llama.cpp) mengisi kolom deskriptif. Jika AI mati, SIPRIKA memakai teks katalog.
+- Export Risk Register ke template Excel. Rumus, dropdown, dan sheet lain tetap utuh.
+- Perlindungan SSRF: localhost, alamat IP, dan domain yang mengarah ke IP privat ditolak.
 
-## Code of Conduct
+## Kebutuhan
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+- PHP 8.3 dengan ekstensi curl, openssl, pdo_sqlite, intl, zip, dom (Laragon sudah cukup)
+- Composer dan Node.js (untuk build CSS)
+- Opsional, untuk Mode Standar dan Nuclei: WSL Ubuntu berisi `nuclei`, `testssl.sh`, `whatweb`, dan `nmap`
+- Opsional, untuk AI: `llama-server` (llama.cpp) dan model `qwen2.5-7b-instruct.Q4_K_M.gguf`
 
-## Security Vulnerabilities
+## Instalasi
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+```
+composer install
+npm install && npm run build
+php artisan siprika:install
+```
 
-## License
+`siprika:install` membuat `.env` (jika belum ada), APP_KEY, database SQLite, menjalankan migrasi, lalu menampilkan ringkasan konfigurasi.
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+## Menjalankan
+
+```
+php artisan siprika:serve
+```
+
+Buka http://127.0.0.1:8000. Perintah ini menjalankan web server, queue worker, dan llama-server (jika `AI_SERVER_COMMAND` diisi). Setelah mengubah `.env`, hentikan (Ctrl+C) lalu jalankan ulang perintah ini, karena queue worker memakai environment saat pertama dijalankan.
+
+## Konfigurasi (.env)
+
+| Variabel | Keterangan |
+|---|---|
+| `SCAN_ALLOWED_DOMAINS` | `*` atau kosong berarti semua domain boleh diperiksa. Isi daftar dipisah koma untuk membatasi, contoh `jemberkab.go.id`. |
+| `SCAN_TARGET_TIMEOUT`, `SCAN_QUICK_TARGET_TIMEOUT` | Batas waktu per website (detik) untuk Mode Standar (2700) dan Mode Cepat (600). |
+| `SCAN_USER_AGENT` | User-Agent tetap supaya admin website mengenali pemeriksaan. |
+| `NUCLEI_PATH`, `TESTSSL_PATH`, `WHATWEB_PATH`, `NMAP_PATH` | Perintah tool, contoh `"wsl -d Ubuntu -e nuclei"`. Kosong berarti pemeriksaan dicatat NOT ASSESSED. |
+| `AI_ENABLED`, `AI_URL`, `AI_TIMEOUT` | AI lokal (llama-server, default port 8081). |
+| `AI_SERVER_COMMAND` | Perintah llama-server yang ikut dijalankan `siprika:serve`. |
+
+Katalog finding, aturan risiko, pola deteksi, dan profil Nuclei ada di `config/siprika*.php`. Semuanya bisa diubah tanpa mengubah kode.
+
+## Struktur Kode
+
+```
+app/
+├── Http/                  Halaman web: input dan antrean (ScanController), hasil per website (ScanTargetController)
+├── Jobs/                  ProcessScanTarget: satu job antrean memeriksa satu website
+├── Scanner/
+│   ├── ScanOrchestrator   Menjalankan pemeriksaan sesuai mode secara berurutan
+│   ├── ScanContext        Data bersama selama satu website diperiksa
+│   ├── Checks/            Satu class per pemeriksaan (DNS, HTTP, header, cookie, TLS, exposure, tool eksternal)
+│   ├── Parsers/           Mengubah output tool (Nuclei, testssl.sh, WhatWeb, Nmap) menjadi finding
+│   ├── Network/           HTTP client aman (SSRF), DNS, TLS, dan port
+│   ├── Tools/             Menjalankan tool eksternal dari perintah di .env
+│   └── FindingRecorder    Menyimpan finding dengan deduplikasi per kunci
+├── Risk/                  RiskEngine (penilaian risiko) dan RiskRegisterExporter (Excel)
+├── Ai/                    Klien llama-server, validasi output AI, dan analisis per finding
+├── Enums/                 ScanMode (daftar pemeriksaan per mode), status, severity
+├── Models/                Batch, target, observation, finding, evidence, Risk Register, hasil AI
+└── Support/               TargetUrlNormalizer: normalisasi dan validasi URL input
+config/siprika*.php        Pengaturan, katalog finding, aturan risiko, pola scanner
+resources/templates/       Template Excel Risk Register
+resources/views/           Halaman Blade; tab hasil ada di views/targets/tabs
+tests/                     Feature test, FakeNetwork (tanpa internet), fixture output tool asli
+```
+
+Alur satu website: `ProcessScanTarget` → `ScanOrchestrator` menjalankan setiap `Check` yang mencatat observation dan finding ke `ScanContext` → `FindingRecorder` → `AiAnalyzer` → `RiskEngine`.
+
+Menambah pemeriksaan baru:
+
+1. Buat class di `app/Scanner/Checks` yang mengimplementasikan `Check`.
+2. Daftarkan di `ScanMode::STANDARD_CHECKS` (dan `QUICK_CHECKS` jika ikut Mode Cepat).
+3. Jika menghasilkan finding baru, tambahkan kuncinya ke `config/siprika_catalog.php`.
+
+## Test
+
+```
+php artisan test
+vendor/bin/pint
+```
+
+Test tidak butuh internet atau tool eksternal. Akses jaringan diganti `tests/Support/FakeNetwork.php`, dan `phpunit.xml` mengosongkan path tool.
+
+## Batasan
+
+SIPRIKA tidak melakukan eksploitasi, brute force, atau pemeriksaan yang membutuhkan login. Tidak ditemukannya kerawanan tidak berarti website sepenuhnya aman. Hanya periksa website yang Anda kelola atau yang sudah memberi izin.

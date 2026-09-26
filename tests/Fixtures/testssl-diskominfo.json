@@ -1,0 +1,183 @@
+[
+    {
+        "id": "engine_problem",
+        "ip": "/",
+        "port": "443",
+        "severity": "WARN",
+        "finding": "No engine or GOST support via engine with your /usr/bin/openssl"
+    },
+    {
+        "id": "service",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "INFO",
+        "finding": "HTTP"
+    },
+    {
+        "id": "SSLv2",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "not offered"
+    },
+    {
+        "id": "SSLv3",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "not offered"
+    },
+    {
+        "id": "TLS1",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "INFO",
+        "finding": "not offered"
+    },
+    {
+        "id": "TLS1_1",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "LOW",
+        "finding": "offered (deprecated)"
+    },
+    {
+        "id": "TLS1_2",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "offered"
+    },
+    {
+        "id": "TLS1_3",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "offered with final"
+    },
+    {
+        "id": "cipherlist_NULL",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "cwe": "CWE-327",
+        "finding": "not offered"
+    },
+    {
+        "id": "cipherlist_aNULL",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "cwe": "CWE-327",
+        "finding": "not offered"
+    },
+    {
+        "id": "cipherlist_EXPORT",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "cwe": "CWE-327",
+        "finding": "not offered"
+    },
+    {
+        "id": "cipherlist_LOW",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "cwe": "CWE-327",
+        "finding": "not offered"
+    },
+    {
+        "id": "cipherlist_3DES_IDEA",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "INFO",
+        "cwe": "CWE-310",
+        "finding": "not offered"
+    },
+    {
+        "id": "cipherlist_OBSOLETED",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "LOW",
+        "cwe": "CWE-310",
+        "finding": "offered"
+    },
+    {
+        "id": "cipherlist_STRONG_NOFS",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "offered"
+    },
+    {
+        "id": "cipherlist_STRONG_FS",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "offered"
+    },
+    {
+        "id": "cert_trust <hostCert#1>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "Ok via SAN wildcard (SNI mandatory)"
+    },
+    {
+        "id": "cert_trust_wildcard <hostCert#1>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "LOW",
+        "finding": "trust is via wildcard"
+    },
+    {
+        "id": "cert_chain_of_trust <hostCert#1>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "passed."
+    },
+    {
+        "id": "cert_notAfter <hostCert#1>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "MEDIUM",
+        "finding": "2026-10-31 05:48"
+    },
+    {
+        "id": "cert_trust <hostCert#2>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "Ok via SAN wildcard (SNI mandatory)"
+    },
+    {
+        "id": "cert_trust_wildcard <hostCert#2>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "LOW",
+        "finding": "trust is via wildcard"
+    },
+    {
+        "id": "cert_chain_of_trust <hostCert#2>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "OK",
+        "finding": "passed."
+    },
+    {
+        "id": "cert_notAfter <hostCert#2>",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "MEDIUM",
+        "finding": "2026-10-31 05:51"
+    },
+    {
+        "id": "scanTime",
+        "ip": "diskominfo.jemberkab.go.id/104.26.12.219",
+        "port": "443",
+        "severity": "INFO",
+        "finding": "68"
+    }
+]
