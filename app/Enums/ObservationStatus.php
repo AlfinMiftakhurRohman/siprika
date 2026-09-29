@@ -11,6 +11,21 @@ enum ObservationStatus: string
     case NotApplicable = 'N/A';
     case NotAssessed = 'NOT ASSESSED';
 
+    /**
+     * Warna isian batang ringkasan Coverage.
+     */
+    public function barClass(): string
+    {
+        return match ($this) {
+            self::Pass => 'bg-emerald-500',
+            self::Fail => 'bg-red-500',
+            self::Info => 'bg-sky-400',
+            self::Error => 'bg-amber-400',
+            self::NotApplicable => 'bg-slate-300',
+            self::NotAssessed => 'bg-slate-400',
+        };
+    }
+
     public function badgeClass(): string
     {
         return match ($this) {

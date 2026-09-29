@@ -7,6 +7,7 @@ use App\Models\ScanFinding;
 use App\Models\ScanTarget;
 use App\Risk\RiskEngine;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
@@ -32,15 +33,13 @@ class AiAnalyzer
             return ['status' => 'disabled', 'summary' => 'AI tidak aktif (AI_ENABLED=false), kolom deskriptif memakai teks katalog.', 'raw' => []];
         }
 
-        $findings = $target->findings()->get()
-            ->filter(fn (ScanFinding $finding) => $this->riskEngine->rule($finding) !== null)
-            ->unique('finding_key');
-
         $analyzed = [];
         $reused = [];
         $rejected = [];
+        // Hasil tersimpan yang tidak lolos validasi terhadap website ini dihapus lalu dianalisis ulang
+        $purged = $this->purgeInvalid($target);
 
-        foreach ($findings as $finding) {
+        foreach ($this->riskFindings($target) as $finding) {
             if (AiAnalysis::where('finding_key', $finding->finding_key)->exists()) {
                 $reused[] = $finding->finding_key;
 
@@ -58,7 +57,7 @@ class AiAnalyzer
                 return [
                     'status' => 'error',
                     'summary' => 'Layanan AI tidak dapat dihubungi atau timeout, dipakai teks katalog.',
-                    'raw' => ['analyzed' => $analyzed, 'reused' => $reused, 'rejected' => $rejected, 'error' => $e->getMessage()],
+                    'raw' => ['analyzed' => $analyzed, 'reused' => $reused, 'rejected' => $rejected, 'purged' => $purged, 'error' => $e->getMessage()],
                 ];
             } catch (RuntimeException $e) {
                 $rejected[$finding->finding_key] = $e->getMessage();
@@ -66,7 +65,7 @@ class AiAnalyzer
                 continue;
             }
 
-            $reason = $this->validator->reject($output, $input);
+            $reason = $this->validator->reject($output, $input, SiteEvidence::from($finding, $target));
 
             if ($reason !== null) {
                 $rejected[$finding->finding_key] = $reason;
@@ -91,37 +90,59 @@ class AiAnalyzer
 
         $summary = sprintf('%d finding dianalisis AI, %d memakai hasil tersimpan, %d ditolak validasi (memakai teks katalog).', count($analyzed), count($reused), count($rejected));
 
+        if ($purged !== []) {
+            $summary .= sprintf(' %d hasil tersimpan dihapus karena tidak lolos validasi terhadap website ini.', count($purged));
+        }
+
         return [
             'status' => $rejected === [] ? 'done' : 'partial',
             'summary' => $summary,
-            'raw' => ['analyzed' => $analyzed, 'reused' => $reused, 'rejected' => $rejected],
+            'raw' => ['analyzed' => $analyzed, 'reused' => $reused, 'rejected' => $rejected, 'purged' => $purged],
         ];
     }
 
     /**
-     * JSON finding hasil normalizer, tanpa URL atau output mentah scanner (bagian 27).
+     * Hapus hasil AI tersimpan yang tidak lolos validasi terhadap evidence website ini, contoh memuat nama cookie
+     * atau versi software website tertentu (bagian 27). Tidak memanggil AI.
      *
-     * Hasil AI disimpan per kunci finding dan dipakai ulang untuk website lain, jadi input hanya berisi
-     * informasi jenis finding (katalog atau template Nuclei), bukan evidence website tertentu seperti
-     * nama host, cookie, atau versi. Detail per website tetap masuk kolom Kerawanan lewat RiskEngine.
-     *
+     * @return array<string, string> kunci finding => alasan
+     */
+    public function purgeInvalid(ScanTarget $target): array
+    {
+        $findings = $this->riskFindings($target);
+        $purged = [];
+
+        foreach (AiAnalysis::whereIn('finding_key', $findings->pluck('finding_key'))->get() as $analysis) {
+            $finding = $findings->firstWhere('finding_key', $analysis->finding_key);
+            $reason = $this->validator->reject($analysis->only(AiOutputValidator::KEYS), $this->input($finding), SiteEvidence::from($finding, $target));
+
+            if ($reason !== null) {
+                $analysis->delete();
+                $purged[$analysis->finding_key] = $reason;
+            }
+        }
+
+        return $purged;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function input(ScanFinding $finding): array
     {
-        $rule = $this->riskEngine->rule($finding) ?? [];
-        $stripUrls = fn (?string $text) => $text === null ? null : trim(preg_replace('/\b(?:https?:\/\/|www\.)[^\s"\'<>]+/i', '[url]', $text));
+        return AiInput::build($finding, $this->riskEngine->rule($finding));
+    }
 
-        return array_filter([
-            'finding_key' => $finding->finding_key,
-            'title' => $finding->title,
-            'description' => $stripUrls($finding->description),
-            'severity' => $finding->severity->value,
-            'cve' => $finding->cve,
-            'cvss' => $finding->cvss,
-            'category' => $rule['category'] ?? null,
-            'threat' => $rule['threat'] ?? null,
-            'vulnerability' => $rule['vulnerability'] ?? null,
-        ], fn ($value) => $value !== null && $value !== []);
+    /**
+     * Finding yang menjadi baris Risk Register, satu per kunci, beserta evidence-nya.
+     *
+     * @return Collection<int, ScanFinding>
+     */
+    private function riskFindings(ScanTarget $target): Collection
+    {
+        return $target->findings()->with('evidences')->get()
+            ->filter(fn (ScanFinding $finding) => $this->riskEngine->rule($finding) !== null)
+            ->unique('finding_key')
+            ->values();
     }
 }

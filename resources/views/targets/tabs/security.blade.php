@@ -4,12 +4,12 @@
         'https', 'http-redirect', 'header-hsts', 'header-csp', 'header-x-frame-options',
         'header-x-content-type-options', 'header-referrer-policy', 'cookie-security',
         'tls-certificate', 'tls-chain', 'tls-expiry', 'tls-protocol', 'testssl',
-        'exposure-files', 'directory-listing', 'server-version', 'nuclei',
+        'exposure-files', 'directory-listing', 'server-version', 'nuclei', 'zap-passive',
     ];
 @endphp
 
 <table class="w-full text-left text-sm">
-    <thead class="border-b border-slate-200 text-slate-600">
+    <thead class="border-b border-slate-200 text-xs tracking-wide text-slate-500 uppercase">
         <tr>
             <th class="py-2 pr-4 font-medium">Pemeriksaan</th>
             <th class="w-36 py-2 pr-4 font-medium">Status</th>

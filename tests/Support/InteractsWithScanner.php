@@ -30,6 +30,7 @@ trait InteractsWithScanner
             'siprika.tools.testssl.command' => null,
             'siprika.tools.whatweb.command' => null,
             'siprika.tools.nmap.command' => null,
+            'siprika.tools.zap.url' => null,
             'siprika.ai.enabled' => false,
         ]);
     }

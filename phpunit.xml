@@ -18,6 +18,8 @@
         </include>
     </source>
     <php>
+        <!-- Test export memakai PhpSpreadsheet yang cukup boros memori; 128 MB bawaan Laragon terlalu sempit untuk seluruh suite -->
+        <ini name="memory_limit" value="256M"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>
@@ -38,6 +40,7 @@
         <env name="TESTSSL_PATH" value=""/>
         <env name="WHATWEB_PATH" value=""/>
         <env name="NMAP_PATH" value=""/>
+        <env name="ZAP_URL" value=""/>
         <env name="AI_ENABLED" value="false"/>
     </php>
 </phpunit>

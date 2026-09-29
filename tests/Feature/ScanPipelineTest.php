@@ -213,6 +213,13 @@ class ScanPipelineTest extends TestCase
         $this->assertSame(ScanTargetStatus::Partial, $target->status);
         $this->assertSame(ObservationStatus::Error, $this->observation($target, 'https')->status);
         $this->assertNotContains('no-https', $target->findings->pluck('finding_key')->all());
+
+        // HTTPS belum terbukti tidak ada, sehingga HSTS dan cookie tidak boleh N/A maupun PASS (bagian 22.2)
+        foreach (['header-hsts', 'cookie-security', 'tls-certificate'] as $key) {
+            $this->assertSame(ObservationStatus::Error, $this->observation($target, $key)->status, $key);
+        }
+
+        $this->assertStringContainsString('waktu habis', $this->observation($target, 'header-hsts')->summary);
     }
 
     public function test_website_yang_tidak_dapat_diakses_gagal_diperiksa(): void
@@ -240,6 +247,119 @@ class ScanPipelineTest extends TestCase
         Http::assertNotSent(fn ($request) => str_contains($request->url(), 'situs-lain.com'));
         $this->assertSame(ObservationStatus::NotAssessed, $this->observation($target, 'header-hsts')->status);
         $this->assertStringContainsString('tidak diikuti', $this->observation($target, 'http-status')->summary);
+    }
+
+    public function test_redirect_ke_subdomain_lain_yang_diizinkan_tidak_diikuti_dan_tujuannya_dicatat(): void
+    {
+        FakeNetwork::http([
+            self::HOME => Http::response('', 302, ['Location' => 'https://portal.jemberkab.go.id/login', 'Set-Cookie' => 'PHPSESSID=abc; path=/']),
+            'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => self::HOME]),
+            'https://portal.jemberkab.go.id/login' => Http::response('<title>Portal</title>', 200, self::secureHeaders()),
+        ]);
+
+        $target = $this->scan();
+
+        // Bagian 22.11: host lain tidak diikuti walaupun domainnya diizinkan
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'portal.jemberkab.go.id'));
+
+        // Respons redirect bukan halaman website: header dan cookie NOT ASSESSED, bukan PASS maupun FAIL
+        foreach (['header-hsts', 'header-csp', 'header-x-frame-options', 'header-x-content-type-options', 'header-referrer-policy', 'cookie-security'] as $key) {
+            $this->assertSame(ObservationStatus::NotAssessed, $this->observation($target, $key)->status, $key);
+        }
+
+        $this->assertStringContainsString('https://portal.jemberkab.go.id/login', $this->observation($target, 'cookie-security')->summary);
+        $this->assertEmpty(array_intersect(['missing-hsts', 'missing-csp', 'insecure-cookie'], $target->findings->pluck('finding_key')->all()));
+
+        // Alamat tujuan dicatat di evidence supaya dapat diperiksa sebagai target terpisah
+        $status = $this->observation($target, 'http-status');
+        $this->assertSame('https://portal.jemberkab.go.id/login', $status->raw['stopped_target']);
+        $this->assertStringContainsString('Periksa portal.jemberkab.go.id sebagai target terpisah', $status->summary);
+        $this->assertSame('https://portal.jemberkab.go.id/login', $target->overview['redirect_target']);
+    }
+
+    public function test_redirect_ke_awalan_www_diikuti_dengan_pemeriksaan_ip_ulang(): void
+    {
+        FakeNetwork::http([
+            self::HOME => Http::response('', 301, ['Location' => 'https://www.web.jemberkab.go.id/']),
+            'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => self::HOME]),
+            'https://www.web.jemberkab.go.id/' => Http::response('<title>Dinas</title>', 200, self::secureHeaders()),
+        ]);
+        $this->network->dns['www.web.jemberkab.go.id'] = ['93.184.216.35'];
+
+        $target = $this->scan();
+
+        $this->assertSame('https://www.web.jemberkab.go.id/', $target->overview['final_url']);
+        $this->assertNull($target->overview['redirect_target']);
+        $this->assertSame(ObservationStatus::Pass, $this->observation($target, 'header-hsts')->status);
+        $this->assertSame(ObservationStatus::Pass, $this->observation($target, 'cookie-security')->status);
+    }
+
+    public function test_redirect_dari_www_ke_host_tanpa_www_diikuti(): void
+    {
+        FakeNetwork::http([
+            'https://www.web.jemberkab.go.id/' => Http::response('', 301, ['Location' => self::HOME]),
+            'http://www.web.jemberkab.go.id/' => Http::response('', 301, ['Location' => 'https://www.web.jemberkab.go.id/']),
+            self::HOME => Http::response('<title>Dinas</title>', 200, self::secureHeaders()),
+        ]);
+
+        $target = $this->scan('https://www.web.jemberkab.go.id');
+
+        $this->assertSame(self::HOME, $target->overview['final_url']);
+        $this->assertSame(ObservationStatus::Pass, $this->observation($target, 'header-csp')->status);
+    }
+
+    public function test_redirect_ke_awalan_www_yang_mengarah_ke_ip_privat_diblokir(): void
+    {
+        FakeNetwork::http([
+            self::HOME => Http::response('', 301, ['Location' => 'https://www.web.jemberkab.go.id/']),
+            'http://web.jemberkab.go.id/' => Http::response('<title>HTTP</title>', 200),
+            'https://www.web.jemberkab.go.id/' => Http::response('<title>Internal</title>', 200),
+        ]);
+        $this->network->dns['www.web.jemberkab.go.id'] = ['10.0.0.5'];
+
+        $this->scan();
+
+        Http::assertNotSent(fn ($request) => str_contains($request->url(), 'www.web.jemberkab.go.id'));
+    }
+
+    public function test_cookie_dari_redirect_https_yang_tidak_diikuti_tidak_dinilai(): void
+    {
+        FakeNetwork::http([
+            'http://web.jemberkab.go.id/' => Http::response('<title>HTTP</title>', 200),
+            self::HOME => Http::response('', 302, ['Location' => 'https://portal.jemberkab.go.id/', 'Set-Cookie' => 'PHPSESSID=abc; path=/']),
+        ]);
+
+        $target = $this->scan('http://web.jemberkab.go.id');
+
+        $cookie = $this->observation($target, 'cookie-security');
+        $this->assertSame(ObservationStatus::NotAssessed, $cookie->status);
+        $this->assertStringContainsString('https://portal.jemberkab.go.id/', $cookie->summary);
+        $this->assertSame(ObservationStatus::NotAssessed, $this->observation($target, 'header-hsts')->status);
+        $this->assertNull($target->findings->firstWhere('finding_key', 'insecure-cookie'));
+    }
+
+    public function test_hsts_dinilai_pada_respons_https_yang_mengalihkan_ke_http(): void
+    {
+        FakeNetwork::http([
+            'http://web.jemberkab.go.id/' => Http::response('<title>HTTP</title>', 200),
+            self::HOME => Http::response('', 301, ['Location' => 'http://web.jemberkab.go.id/']),
+        ]);
+
+        $target = $this->scan('http://web.jemberkab.go.id');
+
+        // HTTPS merespons (tidak ERROR), tetapi respons HTTPS terakhir tidak memasang HSTS
+        $this->assertSame(ObservationStatus::Fail, $this->observation($target, 'header-hsts')->status);
+        $this->assertSame(self::HOME, $target->findings->firstWhere('finding_key', 'missing-hsts')->evidences->first()->endpoint);
+    }
+
+    public function test_host_sama_atau_beda_awalan_www_dianggap_satu_website(): void
+    {
+        $this->assertTrue(SafeHttpClient::isSameSite('web.jemberkab.go.id', 'web.jemberkab.go.id'));
+        $this->assertTrue(SafeHttpClient::isSameSite('web.jemberkab.go.id', 'WWW.web.jemberkab.go.id'));
+        $this->assertTrue(SafeHttpClient::isSameSite('www.web.jemberkab.go.id', 'web.jemberkab.go.id.'));
+        $this->assertFalse(SafeHttpClient::isSameSite('web.jemberkab.go.id', 'portal.jemberkab.go.id'));
+        $this->assertFalse(SafeHttpClient::isSameSite('web.jemberkab.go.id', 'jemberkab.go.id'));
+        $this->assertFalse(SafeHttpClient::isSameSite('web.jemberkab.go.id', 'wwwweb.jemberkab.go.id'));
     }
 
     public function test_halaman_blokir_waf_tidak_dinilai(): void

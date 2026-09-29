@@ -15,6 +15,7 @@ class WhatWebParser
         'Meta-Author', 'Email', 'Cookies', 'PasswordField', 'RedirectLocation', 'Strict-Transport-Security',
         'X-Frame-Options', 'X-XSS-Protection', 'HttpOnly', 'Frame', 'Via-Proxy', 'Content-Language',
         'Open-Graph-Protocol', 'Meta-Refresh-Redirect', 'Access-Control-Allow-Methods', 'Allow', 'Object',
+        'X-Powered-By', 'PoweredBy', 'Content-Security-Policy', 'X-Content-Type-Options', 'Referrer-Policy',
     ];
 
     /**

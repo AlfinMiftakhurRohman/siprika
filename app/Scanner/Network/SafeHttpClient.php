@@ -13,7 +13,8 @@ use Psr\Http\Message\StreamInterface;
 /**
  * HTTP client untuk pemindaian:
  * - koneksi dipaksa ke IP yang sudah dicek publik (CURLOPT_RESOLVE), mencegah DNS rebinding;
- * - redirect diikuti manual maksimal 5 langkah dan hanya ke domain yang diizinkan;
+ * - redirect diikuti manual maksimal 5 langkah, hanya ke host yang sama atau yang berbeda awalan www.
+ *   (bagian 22.11), dengan pemeriksaan IP ulang untuk host baru;
  * - kegagalan jaringan diulang satu kali (bagian 22.3);
  * - sertifikat tidak diverifikasi di sini karena TLS diperiksa terpisah oleh TlsInspector.
  */
@@ -43,6 +44,7 @@ class SafeHttpClient
     {
         $maxBytes ??= (int) config('siprika.scan.max_body_bytes');
         $maxRedirects = $followRedirects ? (int) config('siprika.scan.max_redirects') : 0;
+        $originHost = strtolower((string) parse_url($url, PHP_URL_HOST));
         $chain = [];
 
         while (true) {
@@ -53,10 +55,10 @@ class SafeHttpClient
             }
 
             $next = self::resolveUrl($url, (string) $exchange->header('location'));
-            $reason = $this->redirectBlockReason($next);
+            $reason = $this->redirectBlockReason($originHost, $next);
 
             if ($reason !== null) {
-                return $this->withChain($exchange, $chain, $reason);
+                return $this->withChain($exchange, $chain, $reason, $next);
             }
 
             $chain[] = $exchange;
@@ -67,7 +69,7 @@ class SafeHttpClient
     /**
      * Alasan redirect tidak diikuti, atau null jika boleh diikuti.
      */
-    private function redirectBlockReason(string $url): ?string
+    private function redirectBlockReason(string $originHost, string $url): ?string
     {
         try {
             TargetUrlNormalizer::fromConfig()->normalize($url);
@@ -75,15 +77,31 @@ class SafeHttpClient
             return "Redirect ke {$url} tidak diikuti: {$e->getMessage()}";
         }
 
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+
+        if (! self::isSameSite($originHost, $host)) {
+            return "Redirect ke {$url} tidak diikuti karena host berbeda dari {$originHost}. Periksa {$host} sebagai target terpisah.";
+        }
+
         return null;
+    }
+
+    /**
+     * Host sama, atau hanya berbeda awalan www. (contoh dinas.go.id dan www.dinas.go.id).
+     */
+    public static function isSameSite(string $a, string $b): bool
+    {
+        $strip = fn (string $host) => preg_replace('/^www\./', '', strtolower(rtrim($host, '.')));
+
+        return $strip($a) === $strip($b);
     }
 
     /**
      * @param  list<HttpExchange>  $chain
      */
-    private function withChain(HttpExchange $exchange, array $chain, ?string $stoppedReason = null): HttpExchange
+    private function withChain(HttpExchange $exchange, array $chain, ?string $stoppedReason = null, ?string $stoppedTarget = null): HttpExchange
     {
-        return new HttpExchange($exchange->url, $exchange->status, $exchange->headers, $exchange->body, $chain, $stoppedReason);
+        return new HttpExchange($exchange->url, $exchange->status, $exchange->headers, $exchange->body, $chain, $stoppedReason, $stoppedTarget);
     }
 
     private function requestWithRetry(string $url, int $maxBytes): HttpExchange

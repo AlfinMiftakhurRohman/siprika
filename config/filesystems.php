@@ -33,7 +33,8 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // SIPRIKA tidak menyajikan atau menerima file lewat URL; folder ini hanya berisi output sementara tool
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

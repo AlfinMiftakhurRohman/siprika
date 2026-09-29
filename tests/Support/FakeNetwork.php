@@ -18,6 +18,9 @@ use Throwable;
  */
 class FakeNetwork implements DnsResolver, PortProber, TlsInspector
 {
+    /** @var array<string, mixed> rute HTTP terakhir dari http() */
+    private static array $routes = [];
+
     /** @var array<string, list<string>|Throwable|Closure(): list<string>> */
     public array $dns = [];
 
@@ -104,11 +107,25 @@ class FakeNetwork implements DnsResolver, PortProber, TlsInspector
      */
     public static function http(array $routes): void
     {
-        Http::fake(function (Request $request) use ($routes) {
+        self::$routes = $routes;
+
+        // Http::fake yang terdaftar lebih dulu selalu menang, jadi semua fake membaca rute terakhir:
+        // pemanggilan http() berikutnya dalam satu test mengganti rute sebelumnya
+        Http::fake(function (Request $request) {
+            $routes = self::$routes;
             // https://host dan https://host/ adalah permintaan yang sama (GET /)
             $url = $request->url();
             $url = parse_url($url, PHP_URL_PATH) === null ? $url.'/' : $url;
             $response = $routes[$url] ?? Http::response('Not Found', 404);
+
+            // Kunci berakhiran * mencocokkan awalan URL, contoh API ZAP; nilai Closure menerima permintaannya
+            foreach ($routes as $pattern => $route) {
+                if (! isset($routes[$url]) && str_ends_with($pattern, '*') && str_starts_with($url, rtrim($pattern, '*'))) {
+                    $response = $route instanceof Closure ? $route($request) : $route;
+
+                    break;
+                }
+            }
 
             return match ($response) {
                 'refused' => Http::failedConnection('cURL error 7: Failed to connect: Connection refused')($request),

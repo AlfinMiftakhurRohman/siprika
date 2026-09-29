@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\ProtectLocalApp;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -12,6 +13,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->prepend(ProtectLocalApp::class);
+
         // Textarea URL tidak di-trim otomatis supaya nomor baris pada pesan error tetap sesuai input
         $middleware->trimStrings(except: ['urls']);
     })

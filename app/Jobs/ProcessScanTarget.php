@@ -28,6 +28,11 @@ class ProcessScanTarget implements ShouldQueue
      */
     public int $timeout = 0;
 
+    /**
+     * Website yang riwayatnya sudah dihapus (contoh target dibatalkan lalu batch dihapus) dilewati tanpa dicatat gagal.
+     */
+    public bool $deleteWhenMissingModels = true;
+
     public function __construct(public ScanTarget $target) {}
 
     /**
@@ -35,11 +40,25 @@ class ProcessScanTarget implements ShouldQueue
      */
     public function middleware(): array
     {
-        return [
-            (new WithoutOverlapping('siprika-scanner'))
-                ->releaseAfter(10)
-                ->expireAfter((int) config('siprika.scan.target_timeout') + 600),
-        ];
+        return [self::overlap()];
+    }
+
+    /**
+     * Kunci supaya hanya satu website diperiksa dalam satu waktu. Job lain dilepas ulang setiap 10 detik.
+     */
+    private static function overlap(): WithoutOverlapping
+    {
+        return (new WithoutOverlapping('siprika-scanner'))
+            ->releaseAfter(10)
+            ->expireAfter((int) config('siprika.scan.target_timeout') + 600);
+    }
+
+    /**
+     * Nama kunci cache untuk ScanRecovery, yang melepas kunci milik worker yang sudah berhenti.
+     */
+    public static function overlapLockKey(): string
+    {
+        return self::overlap()->getLockKey(new self(new ScanTarget));
     }
 
     public function retryUntil(): DateTimeInterface

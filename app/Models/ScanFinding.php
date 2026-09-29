@@ -40,4 +40,12 @@ class ScanFinding extends Model
     {
         return $this->hasMany(FindingEvidence::class)->orderBy('id');
     }
+
+    /**
+     * Hasil Nuclei di luar katalog berseverity info: hanya informasi, tidak menjadi baris Risk Register (bagian 24.4).
+     */
+    public function isInformational(): bool
+    {
+        return str_starts_with($this->finding_key, 'nuclei:') && $this->severity === Severity::Info;
+    }
 }

@@ -47,14 +47,15 @@ class TargetUrlNormalizer
             $this->reject('URL terlalu panjang (maksimal '.self::MAX_LENGTH.' karakter).');
         }
 
-        // Tanpa skema (contoh esakip.jemberkab.go.id) dianggap https://. Skema tanpa "//" seperti
+        // Tanpa skema (contoh e-sakip.jemberkab.go.id) dianggap https://. Skema tanpa "//" seperti
         // javascript: atau mailto: tetap ditolak, tetapi host:port (contoh web.id:8080) bukan skema.
         if (! preg_match('~^[a-z][a-z0-9+.\-]*://~i', $input)) {
             if (preg_match('~^([a-z][a-z0-9+.\-]*):(?!\d)~i', $input, $match)) {
                 $scheme = strtolower($match[1]);
 
-                $this->reject(in_array($scheme, ['http', 'https'], true)
-                    ? 'format URL tidak valid, contoh yang benar: https://esakip.jemberkab.go.id.'
+                // Bagian sebelum titik dua yang bertitik adalah nama domain, contoh "web.id:" dengan port kosong
+                $this->reject(in_array($scheme, ['http', 'https'], true) || str_contains($scheme, '.')
+                    ? 'format URL tidak valid, contoh yang benar: https://e-sakip.jemberkab.go.id.'
                     : "skema {$scheme} tidak diizinkan, hanya http atau https.");
             }
 
@@ -77,6 +78,11 @@ class TargetUrlNormalizer
         // Menolak trik seperti https://jemberkab.go.id@situs-lain.com
         if (isset($parts['user']) || isset($parts['pass'])) {
             $this->reject('URL tidak boleh memuat nama pengguna atau kata sandi (@).');
+        }
+
+        // parse_url sudah menolak port di atas 65535, tetapi menerima :0
+        if (isset($parts['port']) && $parts['port'] < 1) {
+            $this->reject('nomor port tidak valid, gunakan 1 sampai 65535.');
         }
 
         $host = rtrim(mb_strtolower($parts['host']), '.');
@@ -103,7 +109,7 @@ class TargetUrlNormalizer
 
         // Nama tanpa titik (contoh intranet) bisa di-resolve DNS lokal ke mesin internal
         if (! str_contains($host, '.')) {
-            $this->reject('gunakan nama domain lengkap, contoh esakip.jemberkab.go.id.');
+            $this->reject('gunakan nama domain lengkap, contoh e-sakip.jemberkab.go.id.');
         }
 
         if (! $this->allowsAllDomains() && ! $this->isAllowedHost($host)) {

@@ -34,7 +34,9 @@ class TestsslCheck extends ExternalToolCheck
     protected function execute(ScanContext $context): void
     {
         if (! $context->httpsAvailable) {
-            $this->observe($context, ObservationStatus::NotApplicable, 'HTTPS tidak tersedia pada website ini.');
+            $context->httpsRefused()
+                ? $this->result($context, ObservationStatus::NotApplicable, 'HTTPS tidak tersedia pada website ini.')
+                : $this->result($context, ObservationStatus::Error, 'HTTPS tidak dapat diakses: '.$context->httpsFailureLabel().'.');
 
             return;
         }
@@ -53,7 +55,7 @@ class TestsslCheck extends ExternalToolCheck
             $items = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
 
             if (! is_array($items)) {
-                $this->observe($context, ObservationStatus::Error, $result->errorSummary());
+                $this->result($context, ObservationStatus::Error, $result->errorSummary());
 
                 return;
             }
@@ -62,7 +64,7 @@ class TestsslCheck extends ExternalToolCheck
 
             // testssl.sh yang gagal di tengah jalan tidak boleh dianggap PASS (bagian 22.2)
             if ($parsed['problem'] !== null) {
-                $this->observe($context, ObservationStatus::Error, 'testssl.sh tidak dapat menyelesaikan pemeriksaan: '.mb_substr($parsed['problem'], 0, 300), ['items' => array_slice($parsed['relevant'], 0, 100)]);
+                $this->result($context, ObservationStatus::Error, 'testssl.sh tidak dapat menyelesaikan pemeriksaan: '.mb_substr($parsed['problem'], 0, 300), ['items' => array_slice($parsed['relevant'], 0, 100)]);
 
                 return;
             }
@@ -71,12 +73,22 @@ class TestsslCheck extends ExternalToolCheck
                 $context->addFinding($finding);
             }
 
-            $this->observe(
+            $this->result(
                 $context,
                 $parsed['findings'] === [] ? ObservationStatus::Pass : ObservationStatus::Fail,
                 $parsed['summary'],
                 ['items' => array_slice($parsed['relevant'], 0, 100)],
             );
         });
+    }
+
+    /**
+     * Observation testssl.sh beserta kunci katalog yang dinilainya, untuk Coverage per kunci (bagian 22.10).
+     *
+     * @param  array<string, mixed>  $raw
+     */
+    private function result(ScanContext $context, ObservationStatus $status, string $summary, array $raw = []): void
+    {
+        $this->observe($context, $status, $summary, $raw + ['assessed_keys' => TestsslParser::KEYS]);
     }
 }

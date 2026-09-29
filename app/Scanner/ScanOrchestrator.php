@@ -8,8 +8,10 @@ use App\Enums\ScanMode;
 use App\Enums\ScanTargetStatus;
 use App\Models\ScanTarget;
 use App\Risk\RiskEngine;
+use App\Scanner\Checks\BackgroundCheck;
 use App\Scanner\Checks\Check;
 use App\Scanner\Network\SafeHttpClient;
+use Closure;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -52,7 +54,9 @@ class ScanOrchestrator
     }
 
     /**
-     * Jalankan pemeriksaan berurutan. Setelah target dihentikan (contoh DNS gagal), sisanya dilewati.
+     * Jalankan pemeriksaan berurutan. Pemeriksaan latar belakang (Nuclei) dimulai pada gilirannya, pemeriksaan
+     * berikutnya dikerjakan sambil menunggu, lalu hasilnya dibaca di akhir. Setelah target dihentikan
+     * (contoh DNS gagal), sisanya dilewati.
      *
      * @param  list<Check>  $checks
      * @return string|null alasan jika target tidak dapat diperiksa lebih lanjut
@@ -60,6 +64,8 @@ class ScanOrchestrator
     private function runChecks(ScanContext $context, array $checks, ScanProgress $progress): ?string
     {
         $abortReason = null;
+        /** @var list<BackgroundCheck> $background */
+        $background = [];
 
         foreach ($checks as $check) {
             if ($abortReason !== null) {
@@ -71,11 +77,33 @@ class ScanOrchestrator
             $before = count($context->observations);
             $progress->set($check->key(), ScanProgress::RUNNING);
 
-            $abortReason = $this->runCheck($context, $check);
+            if ($check instanceof BackgroundCheck) {
+                $this->runCheck($context, $check, fn () => $check->start($context));
+            } else {
+                $abortReason = $this->runCheck($context, $check, fn () => $check->run($context));
+            }
 
             $new = array_slice($context->observations, $before);
             $this->persistObservations($context->target, $new);
-            $progress->set($check->key(), $abortReason !== null ? ScanProgress::ERROR : ScanProgress::fromObservations($new));
+
+            if ($check instanceof BackgroundCheck && $check->isPending()) {
+                $background[] = $check;
+            } else {
+                $progress->set($check->key(), $abortReason !== null ? ScanProgress::ERROR : ScanProgress::fromObservations($new));
+            }
+
+            foreach ($background as $running) {
+                $running->poll();
+            }
+        }
+
+        foreach ($background as $check) {
+            $before = count($context->observations);
+            $this->runCheck($context, $check, fn () => $check->finish($context), checkDeadline: false);
+
+            $new = array_slice($context->observations, $before);
+            $this->persistObservations($context->target, $new);
+            $progress->set($check->key(), ScanProgress::fromObservations($new));
         }
 
         return $abortReason;
@@ -84,18 +112,20 @@ class ScanOrchestrator
     /**
      * Kesalahan tak terduga dicatat ERROR tanpa menghentikan pemeriksaan lain (bagian 13).
      *
+     * @param  Closure(): void  $step
+     * @param  bool  $checkDeadline  false untuk membaca hasil pemeriksaan latar belakang, yang punya batas waktu sendiri
      * @return string|null alasan jika pemeriksaan ini menghentikan target
      */
-    private function runCheck(ScanContext $context, Check $check): ?string
+    private function runCheck(ScanContext $context, Check $check, Closure $step, bool $checkDeadline = true): ?string
     {
-        if ($context->remainingSeconds() <= 0) {
+        if ($checkDeadline && $context->remainingSeconds() <= 0) {
             $context->observe($check->key(), $check->label(), 'internal', ObservationStatus::Error, 'Tidak dijalankan karena pemeriksaan website melewati batas waktu.');
 
             return null;
         }
 
         try {
-            $check->run($context);
+            $step();
         } catch (TargetAborted $e) {
             return $e->getMessage();
         } catch (Throwable $e) {

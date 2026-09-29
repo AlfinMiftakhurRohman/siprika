@@ -38,7 +38,8 @@ class SecurityHeadersCheck implements Check
         $reason = match (true) {
             $response === null => 'Halaman utama tidak dapat diakses.',
             $context->wafBlocked => 'Respons berupa halaman blokir WAF/CDN, bukan website aslinya.',
-            $response->stoppedReason !== null => 'Halaman utama dialihkan ke luar domain yang diizinkan.',
+            // Bagian 22.11: respons redirect yang tidak diikuti bukan halaman website
+            $response->isRedirectStopped() => $response->stoppedRedirectNote(),
             default => null,
         };
 
@@ -62,11 +63,20 @@ class SecurityHeadersCheck implements Check
     {
         // HSTS hanya dinilai pada respons HTTPS; jika halaman utama final HTTP, pakai respons https:// jika ada
         if (! $response->isHttps()) {
-            $response = $context->httpsResponse?->isHttps() && $context->httpsResponse->stoppedReason === null ? $context->httpsResponse : null;
+            $https = $context->httpsResponse;
+
+            if ($https?->isRedirectStopped()) {
+                $context->observe('header-hsts', self::LABELS['header-hsts'], 'internal', ObservationStatus::NotAssessed, $https->stoppedRedirectNote());
+
+                return;
+            }
+
+            // Respons HTTPS terakhir, termasuk respons https:// yang mengalihkan ke http://
+            $response = collect($https?->allResponses() ?? [])->last(fn (HttpExchange $r) => $r->isHttps());
         }
 
         if ($response === null) {
-            $context->observe('header-hsts', self::LABELS['header-hsts'], 'internal', ObservationStatus::NotApplicable, 'Tidak ada respons HTTPS, HSTS hanya berlaku pada HTTPS.');
+            $context->observe('header-hsts', self::LABELS['header-hsts'], 'internal', ...$context->httpsMissingStatus('HSTS'));
 
             return;
         }

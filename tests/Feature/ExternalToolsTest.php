@@ -5,15 +5,18 @@ namespace Tests\Feature;
 use App\Enums\ObservationStatus;
 use App\Enums\ScanMode;
 use App\Enums\ScanTargetStatus;
+use App\Models\ScanTarget;
 use App\Scanner\Evidence;
 use App\Scanner\Parsers\NmapParser;
 use App\Scanner\Parsers\NucleiParser;
 use App\Scanner\Parsers\TestsslParser;
 use App\Scanner\Parsers\WhatWebParser;
+use App\Scanner\Tools\RunningTool;
 use App\Scanner\Tools\ToolResult;
 use App\Scanner\Tools\ToolRunner;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Process\PendingProcess;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use Tests\Support\FakeNetwork;
@@ -65,7 +68,7 @@ class ExternalToolsTest extends TestCase
             return str_starts_with($command, 'nuclei -u https://web.jemberkab.go.id')
                 && str_contains($command, '-no-stdin')
                 && preg_match('/-mt \d+s/', $command) === 1
-                && str_contains($command, '-rl 5')
+                && str_contains($command, '-rl 15 -c 15')
                 && str_contains($command, '-tags exposure,misconfig,tech,ssl,cve')
                 && str_contains($command, 'intrusive,dos,fuzz,default-login');
         });
@@ -196,9 +199,9 @@ class ExternalToolsTest extends TestCase
         {
             public function __construct(private string $partialOutput) {}
 
-            public function run(string $tool, array $arguments, int $timeout, ?string $workingDirectory = null): ToolResult
+            public function start(string $tool, array $arguments, int $timeout, ?string $workingDirectory = null): RunningTool
             {
-                return new ToolResult(false, $this->partialOutput, '', null, true);
+                return new RunningTool(fn () => new ToolResult(false, $this->partialOutput, '', null, true));
             }
         });
 
@@ -209,6 +212,85 @@ class ExternalToolsTest extends TestCase
         $this->assertStringContainsString('melewati batas waktu', $observation->summary);
         $this->assertSame(['nuclei'], $target->findings->firstWhere('finding_key', 'exposed-sensitive-file')->sources);
         $this->assertSame(ScanTargetStatus::Partial, $target->status);
+    }
+
+    public function test_nuclei_berjalan_di_latar_belakang_sementara_tool_lain_dikerjakan(): void
+    {
+        config([
+            'siprika.tools.nuclei.command' => 'nuclei',
+            'siprika.tools.testssl.command' => 'testssl.sh',
+            'siprika.tools.whatweb.command' => 'whatweb',
+            'siprika.tools.nmap.command' => 'nmap',
+        ]);
+        $started = [];
+        $nuclei = json_encode(['template-id' => 'git-config', 'info' => ['name' => 'Git Config Disclosure', 'severity' => 'medium', 'tags' => ['exposure', 'config']], 'matched-at' => self::HOME.'.git/config']);
+        $testssl = self::fixture('testssl-diskominfo.json');
+
+        Process::fake(function (PendingProcess $process) use (&$started, $nuclei, $testssl) {
+            $tool = explode(' ', self::commandOf($process))[0];
+            $started[] = $tool;
+
+            if ($tool === 'testssl.sh') {
+                file_put_contents($process->path.DIRECTORY_SEPARATOR.'testssl.json', $testssl);
+            }
+
+            return Process::result($tool === 'nuclei' ? $nuclei : '');
+        });
+
+        $target = $this->scan();
+
+        // Nuclei dimulai lebih dulu, tool lain dijalankan sambil menunggu (bagian 26: tetap satu website)
+        $this->assertSame(['nuclei', 'nmap', 'testssl.sh', 'whatweb'], $started);
+
+        // Hasil Nuclei dibaca terakhir dan tetap lengkap
+        $keys = $target->observations->pluck('check_key')->all();
+        $this->assertGreaterThan(array_search('testssl', $keys, true), array_search('nuclei', $keys, true));
+        $this->assertSame(['nuclei'], $target->findings->firstWhere('finding_key', 'exposed-sensitive-file')->sources);
+        $this->assertSame(['testssl'], $target->findings->firstWhere('finding_key', 'tls-legacy-protocol')->sources);
+
+        // Semua tahap progress selesai
+        $this->assertSame([], collect($target->progress)->whereIn('status', ['running', 'waiting'])->pluck('key')->all());
+    }
+
+    public function test_nuclei_yang_belum_dipasang_tidak_ditunggu(): void
+    {
+        $target = $this->scan();
+
+        $nuclei = $target->observations->firstWhere('check_key', 'nuclei');
+        $this->assertSame(ObservationStatus::NotAssessed, $nuclei->status);
+        $this->assertSame('skipped', collect($target->progress)->firstWhere('key', 'nuclei')['status']);
+    }
+
+    public function test_label_progress_menampilkan_semua_tahap_yang_berjalan(): void
+    {
+        $target = new ScanTarget(['progress' => [
+            ['key' => 'nuclei', 'label' => 'Nuclei', 'status' => 'running', 'weight' => 1300, 'started_at' => microtime(true)],
+            ['key' => 'testssl', 'label' => 'testssl.sh', 'status' => 'running', 'weight' => 80, 'started_at' => microtime(true)],
+            ['key' => 'whatweb', 'label' => 'WhatWeb', 'status' => 'waiting', 'weight' => 10, 'started_at' => null],
+        ]]);
+
+        $this->assertSame('Nuclei + testssl.sh', $target->currentStep());
+    }
+
+    public function test_lama_tool_latar_belakang_dihitung_sampai_proses_selesai(): void
+    {
+        config(['siprika.tools.nmap.command' => PHP_BINARY]);
+
+        $running = app(ToolRunner::class)->start('nmap', ['-r', 'echo "selesai";'], 30);
+
+        // Proses selesai jauh sebelum hasilnya dibaca, contoh Nuclei yang selesai saat testssl.sh berjalan.
+        // poll() dipanggil berkala seperti di antara pemeriksaan lain.
+        for ($i = 0; $i < 30; $i++) {
+            usleep(50_000);
+            $running->poll();
+        }
+
+        sleep(2);
+        $result = $running->wait();
+
+        $this->assertTrue($result->successful);
+        $this->assertStringContainsString('selesai', $result->output);
+        $this->assertLessThan(2.5, $result->seconds);
     }
 
     public function test_output_parsial_tetap_dikembalikan_saat_tool_melewati_batas_waktu(): void
@@ -337,6 +419,117 @@ class ExternalToolsTest extends TestCase
         $this->assertSame(ObservationStatus::Info, $target->observations->firstWhere('check_key', 'service-version')->status);
     }
 
+    public function test_exposure_nuclei_berseverity_low_tidak_dinaikkan_menjadi_file_sensitif(): void
+    {
+        config(['siprika.tools.nuclei.command' => 'nuclei']);
+        $lines = [
+            // Pola asli: .editorconfig bertag exposure dengan severity low
+            ['template-id' => 'editor-exposure', 'info' => ['name' => 'Editor Configuration File - Detect', 'severity' => 'low', 'tags' => ['config', 'exposure', 'vuln']], 'matched-at' => self::HOME.'.editorconfig'],
+            ['template-id' => 'git-config', 'info' => ['name' => 'Git Config Disclosure', 'severity' => 'medium', 'tags' => ['exposure', 'config', 'git']], 'matched-at' => self::HOME.'.git/config'],
+        ];
+        Process::fake(['*' => Process::result(implode("\n", array_map('json_encode', $lines)))]);
+
+        $target = $this->scan();
+
+        $this->assertSame([self::HOME.'.git/config'], $target->findings->firstWhere('finding_key', 'exposed-sensitive-file')->evidences->pluck('endpoint')->all());
+
+        // Dampak mengikuti severity Nuclei (low = 2, kemungkinan 3), bukan IR 23 File Sensitif
+        $editor = $target->riskItems->firstWhere('finding_key', 'nuclei:editor-exposure');
+        $this->assertSame(10, $editor->inherent_risk);
+        $this->assertSame(23, $target->riskItems->firstWhere('finding_key', 'exposed-sensitive-file')->inherent_risk);
+    }
+
+    public function test_kolom_kerawanan_memuat_endpoint_lain_yang_hanya_ditemukan_nuclei(): void
+    {
+        config(['siprika.tools.nuclei.command' => 'nuclei']);
+        FakeNetwork::http([
+            self::HOME => Http::response('<title>Web</title>', 200, self::secureHeaders()),
+            'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => self::HOME]),
+            'https://web.jemberkab.go.id/.env' => Http::response("APP_KEY=base64:rahasia\nDB_PASSWORD=rahasia\n", 200),
+        ]);
+        $exposure = fn (string $id, string $path) => ['template-id' => $id, 'info' => ['name' => $id, 'severity' => 'medium', 'tags' => ['exposure', 'config']], 'matched-at' => self::HOME.$path];
+        Process::fake(['*' => Process::result(implode("\n", array_map('json_encode', [$exposure('laravel-env', '.env'), $exposure('git-config', '.git/config')])))]);
+
+        $target = $this->scan();
+        $vulnerability = $target->riskItems->firstWhere('finding_key', 'exposed-sensitive-file')->vulnerability;
+
+        // .env ditemukan pemeriksaan bawaan dan Nuclei: satu penjelasan; .git/config hanya Nuclei: tetap tampil
+        $this->assertStringContainsString('.env', $vulnerability);
+        $this->assertStringNotContainsString('laravel-env', $vulnerability);
+        $this->assertStringContainsString('git-config', $vulnerability);
+    }
+
+    public function test_hasil_waf_detect_bukan_teknologi_dan_nama_teknologi_tidak_ganda(): void
+    {
+        config(['siprika.tools.nuclei.command' => 'nuclei']);
+        $info = fn (string $id, ?string $matcher, string $name, array $tags) => array_filter(['template-id' => $id, 'matcher-name' => $matcher, 'info' => ['name' => $name, 'severity' => 'info', 'tags' => $tags], 'matched-at' => self::HOME]);
+        $lines = [
+            // Pola asli dari server LiteSpeed: waf-detect cocok dengan tiga WAF sekaligus
+            $info('waf-detect', 'varnish', 'WAF Detection', ['waf', 'tech', 'misc']),
+            $info('waf-detect', 'alertlogic', 'WAF Detection', ['waf', 'tech', 'misc']),
+            $info('s3-detect', null, 'Detect Amazon-S3 Bucket', ['aws', 's3', 'bucket', 'tech']),
+            $info('tech-detect', 'font-awesome', 'Wappalyzer Technology Detection', ['tech']),
+            $info('tech-detect', 'google-font-api', 'Wappalyzer Technology Detection', ['tech']),
+            $info('php-detect', null, 'PHP Detect', ['tech', 'php']),
+            $info('fingerprinthub-web-fingerprints', 'laravel-framework', 'FingerprintHub Technology Fingerprint', ['tech']),
+            $info('fingerprinthub-web-fingerprints', 'laravel', 'FingerprintHub Technology Fingerprint', ['tech']),
+        ];
+        Process::fake(['*' => Process::result(implode("\n", array_map('json_encode', $lines)))]);
+
+        $target = $this->scan();
+        $names = array_column($target->overview['technologies'], 'name');
+
+        $this->assertNotContains('Varnish', $names);
+        $this->assertNotContains('Alertlogic', $names);
+        $this->assertNotContains('Detect Amazon-S3 Bucket', $names);
+        $this->assertContains('Font Awesome', $names);
+        $this->assertContains('Google Font Api', $names);
+        // "PHP Detect" dan "laravel-framework" sama dengan PHP dan Laravel
+        $this->assertSame(1, count(array_filter($names, fn ($n) => stripos($n, 'php') === 0)));
+        $this->assertSame(1, count(array_filter($names, fn ($n) => stripos($n, 'laravel') === 0)));
+    }
+
+    public function test_check_nuclei_mencocokkan_profile_keys_dengan_template_terpasang(): void
+    {
+        config(['siprika.tools.nuclei.command' => 'nuclei']);
+        $quick = "http/misconfiguration/http-missing-security-headers.yaml\nssl/deprecated-tls.yaml\nssl/weak-cipher-suites.yaml\nssl/expired-ssl.yaml\nssl/untrusted-root-certificate.yaml\nhttp/exposures/configs/git-config.yaml";
+        Process::fake(function (PendingProcess $process) use ($quick) {
+            $command = self::commandOf($process);
+
+            // Profil Standar kehilangan template cipher lemah tetapi mendapat template directory listing
+            return Process::result(str_contains($command, '-tags exposure,misconfig,tech,ssl,cve')
+                ? str_replace('ssl/weak-cipher-suites.yaml', 'http/miscellaneous/dir-listing.yaml', $quick)."\nhttp/misconfiguration/cookies-without-secure.yaml"
+                : $quick);
+        });
+        config(['siprika_scanner.nuclei_map.dir-listing' => 'directory-listing']);
+
+        $this->assertSame(1, Artisan::call('siprika:check-nuclei'));
+        $output = Artisan::output();
+
+        $this->assertMatchesRegularExpression('/Profil standard.*tls-weak-cipher \.+ tidak ada template, hapus dari profile_keys/s', $output);
+        $this->assertMatchesRegularExpression('/directory-listing \.+ tercakup, tambahkan ke profile_keys/', $output);
+        $this->assertMatchesRegularExpression('/Profil quick.*tls-weak-cipher \.+ tercakup\s/s', $output);
+
+        // Daftar template memakai filter yang sama dengan pemindaian, tanpa memindai target
+        Process::assertRan(fn (PendingProcess $process) => str_starts_with(self::commandOf($process), 'nuclei -tl')
+            && str_contains(self::commandOf($process), '-etags intrusive,dos,fuzz')
+            && ! str_contains(self::commandOf($process), '-u '));
+    }
+
+    public function test_check_nuclei_berhasil_jika_profile_keys_sesuai(): void
+    {
+        config([
+            'siprika.tools.nuclei.command' => 'nuclei',
+            'siprika.tools.nuclei.profiles' => ['quick' => [['ids' => ['weak-cipher-suites']]]],
+            'siprika.tools.nuclei.profile_keys' => ['quick' => ['tls-weak-cipher']],
+        ]);
+        Process::fake(['*' => Process::result("ssl/weak-cipher-suites.yaml\n")]);
+
+        $this->artisan('siprika:check-nuclei')
+            ->expectsOutputToContain('profile_keys sesuai')
+            ->assertSuccessful();
+    }
+
     public function test_path_tool_dari_env_dikosongkan_saat_test(): void
     {
         // phpunit.xml mengosongkan path tool supaya test tidak pernah menjalankan scanner sungguhan
@@ -344,6 +537,7 @@ class ExternalToolsTest extends TestCase
         $this->assertSame('', (string) env('TESTSSL_PATH'));
         $this->assertSame('', (string) env('WHATWEB_PATH'));
         $this->assertSame('', (string) env('NMAP_PATH'));
+        $this->assertSame('', (string) env('ZAP_URL'));
     }
 
     public function test_output_testssl_dipetakan_ke_kunci_finding(): void
@@ -374,9 +568,11 @@ class ExternalToolsTest extends TestCase
                 'Title' => ['string' => ['Web']],
                 'JQuery' => [],
                 'Country' => ['string' => ['INDONESIA']],
+                'X-Powered-By' => ['string' => ['PHP/8.3.33']],
             ],
         ]]);
 
+        // X-Powered-By adalah nama header, bukan teknologi
         $this->assertSame(['WordPress', 'JQuery'], array_column($technologies, 'name'));
         $this->assertSame('6.4.2', $technologies[0]['version']);
 
@@ -384,13 +580,43 @@ class ExternalToolsTest extends TestCase
             .'<port protocol="tcp" portid="80"><state state="open"/><service name="http" product="nginx" version="1.24.0"/></port>'
             .'<port protocol="tcp" portid="8080"><state state="closed"/><service name="http-proxy"/></port>'
             .'<port protocol="tcp" portid="443"><state state="open"/><service name="https"/></port>'
+            // Pola asli Nmap untuk LiteSpeed: service http lewat TLS
+            .'<port protocol="tcp" portid="8443"><state state="open"/><service name="http" product="LiteSpeed httpd" tunnel="ssl"/></port>'
             .'</ports></host></nmaprun>';
 
         $this->assertSame([
             ['port' => 80, 'service' => 'http', 'product' => 'nginx', 'version' => '1.24.0'],
             ['port' => 443, 'service' => 'https', 'product' => null, 'version' => null],
+            ['port' => 8443, 'service' => 'https', 'product' => 'LiteSpeed httpd', 'version' => null],
         ], NmapParser::parse($xml));
 
         $this->assertNull(NmapParser::parse('bukan xml'));
+    }
+
+    public function test_cipher_tls_lama_dari_nuclei_hanya_menjadi_cipher_lemah_jika_termasuk_kategori_lemah(): void
+    {
+        $line = fn (string $matcher, ?array $extracted) => json_encode(array_filter([
+            'template-id' => 'weak-cipher-suites',
+            'matcher-name' => $matcher,
+            'info' => ['name' => 'Weak Cipher Suites Detection', 'severity' => 'low', 'tags' => ['ssl', 'tls', 'misconfig']],
+            'type' => 'ssl',
+            'matched-at' => 'web.jemberkab.go.id:443',
+            'extracted-results' => $extracted,
+        ], fn ($value) => $value !== null));
+        $findings = fn (string $output) => NucleiParser::parse($output)['findings'];
+
+        // Output asli j-krep.jemberkab.go.id: AES-CBC di TLS 1.1 sudah tercakup tls-legacy-protocol
+        $aesCbc = $line('tls-1.1', ['[tls11 TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA]']);
+        $this->assertSame([], $findings($aesCbc));
+        $this->assertCount(1, NucleiParser::parse($aesCbc)['results'], 'Hasil tetap tercatat untuk Coverage');
+
+        foreach (['TLS_RSA_WITH_3DES_EDE_CBC_SHA', 'TLS_ECDHE_RSA_WITH_RC4_128_SHA', 'TLS_RSA_WITH_NULL_SHA', 'TLS_DH_anon_WITH_AES_128_CBC_SHA', 'TLS_RSA_EXPORT_WITH_DES40_CBC_SHA'] as $cipher) {
+            $weak = $findings($line('tls-1.0', ["[tls10 {$cipher}]"]));
+            $this->assertSame(['tls-weak-cipher'], array_map(fn ($finding) => $finding->key, $weak), $cipher);
+            $this->assertStringContainsString($cipher, $weak[0]->detail);
+        }
+
+        // Nuclei tanpa nama cipher: tetap dianggap lemah supaya tidak terlewat
+        $this->assertSame(['tls-weak-cipher'], array_map(fn ($finding) => $finding->key, $findings($line('tls-1.0', null))));
     }
 }

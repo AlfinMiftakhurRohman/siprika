@@ -9,6 +9,9 @@ use App\Scanner\Data\FindingData;
  */
 class TestsslParser
 {
+    /** Kunci katalog yang dinilai testssl.sh */
+    public const KEYS = ['tls-chain-incomplete', 'tls-legacy-protocol', 'tls-weak-cipher'];
+
     private const PROTOCOLS = ['SSLv2', 'SSLv3', 'TLS1', 'TLS1_1', 'TLS1_2', 'TLS1_3'];
 
     private const LEGACY_PROTOCOLS = ['SSLv2' => 'SSL 2', 'SSLv3' => 'SSL 3', 'TLS1' => 'TLS 1.0', 'TLS1_1' => 'TLS 1.1'];

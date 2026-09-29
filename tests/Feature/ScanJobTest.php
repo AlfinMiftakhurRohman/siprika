@@ -8,6 +8,7 @@ use App\Models\ScanTarget;
 use App\Scanner\Network\IpGuard;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -67,6 +68,24 @@ class ScanJobTest extends TestCase
             foreach ($columns as $column) {
                 $this->assertSame('text', Schema::getColumnType($table, $column), "{$table}.{$column}");
             }
+        }
+    }
+
+    public function test_hasil_pemeriksaan_dicari_lewat_index_bukan_membaca_seluruh_tabel(): void
+    {
+        $queries = [
+            'select * from scan_targets where scan_batch_id = 1',
+            'select * from scan_observations where scan_target_id = 1',
+            'select * from scan_findings where scan_target_id = 1',
+            'select * from finding_evidences where scan_finding_id in (1, 2)',
+            'select * from risk_register_items where scan_target_id = 1',
+            'select * from risk_register_items where scan_finding_id = 1',
+        ];
+
+        foreach ($queries as $sql) {
+            $plan = collect(DB::select("explain query plan {$sql}"))->pluck('detail')->implode('; ');
+
+            $this->assertStringStartsWith('SEARCH', $plan, $sql);
         }
     }
 

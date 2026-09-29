@@ -37,6 +37,20 @@ enum Severity: string
         };
     }
 
+    /**
+     * Warna garis tepi kartu finding.
+     */
+    public function accentClass(): string
+    {
+        return match ($this) {
+            self::Info => 'border-l-slate-300',
+            self::Low => 'border-l-sky-400',
+            self::Medium => 'border-l-amber-400',
+            self::High => 'border-l-orange-500',
+            self::Critical => 'border-l-red-600',
+        };
+    }
+
     public function badgeClass(): string
     {
         return match ($this) {

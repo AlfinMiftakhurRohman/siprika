@@ -29,9 +29,13 @@ class NmapParser
                 continue;
             }
 
+            // Service lewat TLS (tunnel="ssl") ditulis https, bukan http
+            $service = ((string) $port->service['name']) ?: null;
+            $service = $service === 'http' && (string) $port->service['tunnel'] === 'ssl' ? 'https' : $service;
+
             $services[] = [
                 'port' => (int) $port['portid'],
-                'service' => ((string) $port->service['name']) ?: null,
+                'service' => $service,
                 'product' => ((string) $port->service['product']) ?: null,
                 'version' => ((string) $port->service['version']) ?: null,
             ];

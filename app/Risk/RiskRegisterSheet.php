@@ -11,16 +11,14 @@ use App\Models\RiskRegisterItem;
 class RiskRegisterSheet
 {
     /**
-     * Kolom yang diisi SIPRIKA. Kolom yang diisi user (I, S, T, U, V, W, AA) dibiarkan kosong,
+     * Kolom yang diisi SIPRIKA. Kolom yang diisi staf (S, T, AA) dibiarkan kosong,
      * kolom rumus template (L, M, X, Y) dihitung Excel.
      *
      * @return array<string, string|int>
      */
     public static function values(RiskRegisterItem $item, int $number): array
     {
-        $notAcceptable = $item->isNotAcceptable();
-
-        return [
+        $values = [
             'A' => self::riskNumber($number),
             'B' => (string) config('siprika_risk.risk_type'),
             'C' => $item->asset,
@@ -29,30 +27,45 @@ class RiskRegisterSheet
             'F' => $item->category,
             'G' => $item->impact_description,
             'H' => $item->impact_area,
+            'I' => (string) config('siprika_risk.current_control'),
             'J' => $item->impactLabel(),
             'K' => $item->likelihoodLabel(),
-            'N' => $notAcceptable ? 'Ya' : '',
+            'N' => (string) config('siprika_risk.treatment_decision'),
             'O' => (int) $item->priority,
-            'P' => $notAcceptable ? (string) config('siprika_risk.treatment_option') : '',
+            'P' => (string) config('siprika_risk.treatment_option'),
             'Q' => $item->action_plan,
             'R' => $item->output,
             'Z' => $item->additional_control,
         ];
+
+        // Baris lama yang belum dihitung ulang (siprika:recalculate) tidak punya nilai residual
+        if ($item->hasResidual()) {
+            $values += [
+                'U' => (string) config('siprika_risk.residual.exists'),
+                'V' => $item->residualImpactLabel(),
+                'W' => $item->residualLikelihoodLabel(),
+            ];
+        }
+
+        return $values;
     }
 
     /**
      * Nilai yang tampil di Excel setelah rumus template dihitung: IR (L), Level (M), serta
-     * Residual Risk (X, Y) yang bernilai N/A selama kolom U belum diisi "Ya".
+     * RR (X) dan Status residual (Y) yang bernilai N/A jika kolom U bukan "Ya".
      *
      * @return array<string, string|int>
      */
     public static function displayValues(RiskRegisterItem $item, int $number): array
     {
-        return self::values($item, $number) + [
+        $values = self::values($item, $number);
+        $residual = ($values['U'] ?? null) === 'Ya';
+
+        return $values + [
             'L' => (int) $item->inherent_risk,
             'M' => $item->risk_level,
-            'X' => 'N/A',
-            'Y' => 'N/A',
+            'X' => $residual ? (int) $item->residual_risk : 'N/A',
+            'Y' => $residual ? $item->residual_status : 'N/A',
         ];
     }
 

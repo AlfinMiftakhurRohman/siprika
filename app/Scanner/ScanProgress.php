@@ -5,6 +5,7 @@ namespace App\Scanner;
 use App\Enums\ObservationStatus;
 use App\Enums\ScanMode;
 use App\Models\ScanTarget;
+use App\Scanner\Checks\BackgroundCheck;
 use App\Scanner\Checks\Check;
 use App\Scanner\Checks\ExternalToolCheck;
 use App\Scanner\Data\ObservationData;
@@ -27,7 +28,12 @@ class ScanProgress
 
     public const SKIPPED = 'skipped';
 
-    /** @var array<string, array{label: string, status: string, weight: int, started_at: float|null}> */
+    /**
+     * background: tahap yang berjalan di latar belakang (Nuclei) bersamaan dengan tahap sesudahnya,
+     * after_checks: tahap setelah semua pemeriksaan selesai (AI dan Risk Assessment).
+     *
+     * @var array<string, array{label: string, status: string, weight: int, started_at: float|null, finished_at?: float, background?: bool, after_checks?: bool}>
+     */
     private array $steps = [];
 
     /**
@@ -40,50 +46,104 @@ class ScanProgress
         foreach ($checks as $check) {
             // Tool eksternal yang belum dipasang selesai seketika (NOT ASSESSED)
             $weight = $check instanceof ExternalToolCheck && ! $check->isAvailable() ? 1 : self::expectedSeconds($check->key(), $mode);
-            $this->steps[$check->key()] = self::step($check->label(), $weight);
+            $this->steps[$check->key()] = self::step($check->label(), $weight, background: $check instanceof BackgroundCheck);
         }
 
-        $this->steps['ai-analysis'] = self::step('AI Analysis', config('siprika.ai.enabled') ? self::expectedSeconds('ai-analysis', $mode) : 1);
-        $this->steps['risk-assessment'] = self::step('Risk Assessment', self::expectedSeconds('risk-assessment', $mode));
+        $this->steps['ai-analysis'] = self::step('AI Analysis', config('siprika.ai.enabled') ? self::expectedSeconds('ai-analysis', $mode) : 1, afterChecks: true);
+        $this->steps['risk-assessment'] = self::step('Risk Assessment', self::expectedSeconds('risk-assessment', $mode), afterChecks: true);
 
         $this->save();
     }
 
     public function set(string $key, string $status): void
     {
+        // Tahap yang tidak terdaftar tidak ditambahkan, supaya data progress tetap lengkap (label dan bobot)
+        if (! isset($this->steps[$key])) {
+            return;
+        }
+
         $this->steps[$key]['status'] = $status;
 
         if ($status === self::RUNNING) {
             $this->steps[$key]['started_at'] = microtime(true);
+        } elseif ($status !== self::WAITING) {
+            // Jam selesai setiap tahap untuk rincian waktu di laporan mentah
+            $this->steps[$key]['finished_at'] = microtime(true);
         }
 
         $this->save();
     }
 
     /**
-     * Persentase dari bobot tahap yang sudah selesai. Tahap yang sedang berjalan dihitung dari waktu
-     * yang sudah berjalan, maksimal 95% bobotnya. Hasil maksimal 99, 100 hanya untuk target yang selesai.
+     * Persentase dari waktu yang sudah berjalan dibanding perkiraan seluruh waktu (berjalan + sisa), sehingga selalu
+     * sejalan dengan perkiraan sisa waktu. Maksimal 99, 100 hanya untuk target yang selesai. Sebelum ada tahap yang
+     * mulai, dipakai bobot tahap yang sudah selesai.
      *
-     * @param  list<array{status: string, weight?: int, started_at?: float|null}>  $steps
+     * @param  list<array{status: string, weight?: int, started_at?: float|null, background?: bool, after_checks?: bool}>  $steps
      */
     public static function percent(array $steps, ?float $now = null): int
     {
         $now ??= microtime(true);
-        $total = 0;
-        $done = 0.0;
+        $started = array_filter(array_map(fn (array $step) => $step['started_at'] ?? null, $steps));
+
+        if ($started === []) {
+            $total = array_sum(array_map(fn (array $step) => max(1, (int) ($step['weight'] ?? 1)), $steps));
+            $done = array_sum(array_map(fn (array $step) => in_array($step['status'], [self::DONE, self::ERROR, self::SKIPPED], true) ? max(1, (int) ($step['weight'] ?? 1)) : 0, $steps));
+
+            return $total === 0 ? 0 : (int) min(99, floor($done / $total * 100));
+        }
+
+        $elapsed = max(0, $now - min($started));
+        $remaining = self::remainingSeconds($steps, $now);
+
+        return $elapsed + $remaining <= 0 ? 99 : (int) min(99, floor($elapsed / ($elapsed + $remaining) * 100));
+    }
+
+    /**
+     * Perkiraan sisa detik dari bobot (perkiraan lama) setiap tahap. Tahap latar belakang (Nuclei) berjalan bersamaan
+     * dengan pemeriksaan sesudahnya, jadi yang dihitung adalah yang paling lama di antara keduanya; tahap AI dan Risk
+     * Assessment menunggu keduanya selesai. Data progress lama tanpa tanda background dihitung berurutan.
+     *
+     * @param  list<array{status: string, weight?: int, started_at?: float|null, background?: bool, after_checks?: bool}>  $steps
+     */
+    public static function remainingSeconds(array $steps, ?float $now = null): int
+    {
+        $now ??= microtime(true);
+        $sequential = 0.0;
+        $background = 0.0;
+        $parallel = 0.0;
+        $backgroundStarted = false;
 
         foreach ($steps as $step) {
-            $weight = max(1, (int) ($step['weight'] ?? 1));
-            $total += $weight;
+            $left = self::stepRemaining($step, $now);
 
-            if (in_array($step['status'], [self::DONE, self::ERROR, self::SKIPPED], true)) {
-                $done += $weight;
-            } elseif ($step['status'] === self::RUNNING && isset($step['started_at'])) {
-                $done += min(0.95, max(0, $now - $step['started_at']) / $weight) * $weight;
+            if (! empty($step['background'])) {
+                $background += $left;
+                $backgroundStarted = true;
+            } elseif ($backgroundStarted && empty($step['after_checks'])) {
+                $parallel += $left;
+            } else {
+                $sequential += $left;
             }
         }
 
-        return $total === 0 ? 0 : (int) min(99, floor($done / $total * 100));
+        return (int) round($sequential + max($background, $parallel));
+    }
+
+    /**
+     * Sisa satu tahap: bobot penuh jika menunggu, sisa bobot dari waktu berjalan (maksimal 95% terpakai) jika berjalan.
+     *
+     * @param  array{status: string, weight?: int, started_at?: float|null}  $step
+     */
+    private static function stepRemaining(array $step, float $now): float
+    {
+        $weight = max(1, (int) ($step['weight'] ?? 1));
+
+        return match ($step['status']) {
+            self::WAITING => $weight,
+            self::RUNNING => (1 - min(0.95, (isset($step['started_at']) ? max(0, $now - $step['started_at']) : 0) / $weight)) * $weight,
+            default => 0.0,
+        };
     }
 
     /**
@@ -134,11 +194,12 @@ class ScanProgress
     }
 
     /**
-     * @return array{label: string, status: string, weight: int, started_at: float|null}
+     * @return array{label: string, status: string, weight: int, started_at: float|null, background?: bool, after_checks?: bool}
      */
-    private static function step(string $label, int $weight): array
+    private static function step(string $label, int $weight, bool $background = false, bool $afterChecks = false): array
     {
-        return ['label' => $label, 'status' => self::WAITING, 'weight' => $weight, 'started_at' => null];
+        return ['label' => $label, 'status' => self::WAITING, 'weight' => $weight, 'started_at' => null]
+            + array_filter(['background' => $background, 'after_checks' => $afterChecks]);
     }
 
     private function save(): void

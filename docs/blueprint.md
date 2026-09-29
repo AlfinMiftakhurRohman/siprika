@@ -1,9 +1,7 @@
-
 # Catatan Pengembangan (berlaku saat ini, mengalahkan isi blueprint di bawah jika bertentangan)
 
-- Framework: Laravel 13, PHP 8.3
-- Lingkungan pengembangan: Windows + Laragon, bukan WSL2 atau Docker
-- Mode Standar membutuhkan WSL2 atau Linux karena testssl.sh dan WhatWeb tidak berjalan langsung di Windows
+- Framework: Laravel 13, PHP 8.3.
+- Lingkungan pengembangan: Laravel berjalan di Windows + Laragon. Tool eksternal (Nuclei, testssl.sh, WhatWeb, Nmap) dijalankan lewat WSL Ubuntu tanpa shell, contoh `NUCLEI_PATH="wsl -d Ubuntu -e nuclei"`. Tidak memakai Docker.
 - Database sementara: SQLite, target akhir PostgreSQL. Jangan pakai query khusus PostgreSQL.
 - Queue sementara: driver database, target akhir Redis. Tidak memakai Laravel Horizon.
 - Tanpa login, dipakai satu orang secara lokal.
@@ -12,16 +10,13 @@
 - Katalog finding dan aturan penilaian disimpan di file konfigurasi, bukan ditulis langsung di kode, supaya nilainya bisa diubah tanpa mengubah program.
 - Urutan pengerjaan: (1) halaman input dan antrean, (2) scanner Mode Cepat, (3) halaman hasil, (4) Nuclei, (5) Risk Engine dan export Excel, (6) AI paling akhir.
 - Input target boleh tanpa http:// atau https:// (contoh esakip.jemberkab.go.id), dianggap https://. Nama tanpa titik ditolak.
-- SCAN_ALLOWED_DOMAINS berisi * atau kosong berarti semua domain boleh diperiksa (mengganti bagian 26). Isi daftar domain untuk membatasi. Localhost, alamat IP, dan domain yang mengarah ke IP privat tetap ditolak.
 - Domain yang tidak ada di DNS (NXDOMAIN) dicatat FAIL "tidak ditemukan di DNS". Jika server DNS tidak merespons, dicatat ERROR.
 - Mode Cepat dan Standar sama-sama tersedia, Standar terpilih secara bawaan. Pemeriksaan khusus Mode Standar (Port/Nmap, testssl.sh, WhatWeb, ZAP) dicatat NOT ASSESSED pada Mode Cepat supaya terlihat di Coverage.
-- Informasi HTTP (bagian 3, httpx) dikerjakan pemeriksaan bawaan PHP karena koneksi harus dikunci ke IP yang sudah lolos pemeriksaan SSRF. httpx tidak dipakai.
-- Profil Nuclei per mode ada di config siprika.tools.nuclei.profiles. Dengan batas 5 request per detik, semua template bertag exposure, misconfig, tech, dan ssl berjumlah sekitar 5.500 request dan tidak selesai dalam 10 menit. Karena itu Mode Cepat hanya menjalankan 10 template informasi penting ditambah tag tersebut dengan severity high dan critical (sekitar 1.000 request, sekitar 3 menit). Mode Standar menjalankan semua severity ditambah tag cve (sekitar 7.000 request, sekitar 22 menit).
-- Batas waktu: Mode Cepat 10 menit, Mode Standar 45 menit per website, Nuclei 30 menit. Tool yang terpotong batas waktu dicatat ERROR, tetapi hasil yang sempat didapat tetap disimpan.
-- Tool eksternal di Windows dijalankan lewat WSL Ubuntu tanpa shell, contoh NUCLEI_PATH="wsl -d Ubuntu -e nuclei".
-- AI memakai llama.cpp build CPU untuk Windows (D:\tools\llama.cpp). llama-server ikut dijalankan oleh php artisan siprika:serve jika AI_SERVER_COMMAND diisi. Satu analisis sekitar 40 sampai 50 detik di CPU, hasilnya disimpan per kunci finding dan dipakai ulang.
+- Informasi HTTP dikerjakan pemeriksaan bawaan PHP, bukan httpx, karena koneksi harus dikunci ke IP yang sudah lolos pemeriksaan SSRF.
+- AI memakai llama.cpp build CPU untuk Windows (storage/app/llama.cpp, model di storage/app/models). llama-server ikut dijalankan oleh php artisan siprika:serve jika AI_SERVER_COMMAND diisi. Satu analisis sekitar 40 sampai 50 detik di CPU, hasilnya disimpan per kunci finding dan dipakai ulang.
 - Setelah mengubah .env, hentikan lalu jalankan ulang php artisan siprika:serve karena queue worker memakai environment saat pertama dijalankan.
 - Website di belakang Cloudflare Bot Fight Mode menyajikan halaman tantangan ke HTTP client PHP. Pemeriksaan header, cookie, dan exposure dicatat NOT ASSESSED sampai User-Agent atau IP SIPRIKA dimasukkan ke allowlist WAF. SIPRIKA tidak mengakali proteksi tersebut.
+- Batas pemindaian, profil Nuclei, dan batas waktu dijelaskan di bagian 26.
 
 ---
 
@@ -93,22 +88,22 @@ Setelah Website A selesai, SIPRIKA otomatis melanjutkan Website B dan seterusnya
 
 Digunakan untuk memperoleh gambaran umum website dalam waktu lebih singkat.
 
-- **httpx** (tool utama): mendeteksi HTTP status, HTTPS, title, redirect, web server, IP, CDN/WAF.
+- **Pemeriksaan HTTP bawaan**: mendeteksi HTTP status, HTTPS, title, redirect, web server, IP, CDN/WAF. Koneksi dikunci ke IP yang sudah lolos pemeriksaan SSRF.
 - **HTTP Security Checker**: memeriksa HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Secure Cookie, HttpOnly, SameSite.
 - **Technology Detection**: mendeteksi CMS, framework, web server, JavaScript library, dan teknologi lain yang terlihat dari luar.
 - **TLS Basic**: memeriksa certificate validity, masa berlaku, hostname, versi TLS dasar.
-- **Nuclei Light**: hanya menjalankan template aman dan ringan seperti exposure, misconfiguration, technology detection, informational security checks.
+- **Nuclei Light**: menjalankan profil ringan yang dijelaskan di bagian 26.
 
 ## 4. Mode Standar
 
-Mode Standar menjalankan seluruh pemeriksaan Mode Cepat ditambah pemeriksaan yang lebih lengkap.
+Mode Standar menjalankan seluruh pemeriksaan Mode Cepat ditambah pemeriksaan yang lebih lengkap. Di Windows, tool eksternal dijalankan lewat WSL Ubuntu.
 
 Scanner yang digunakan:
 
-- **httpx**: pemeriksaan informasi dasar website.
+- **Pemeriksaan HTTP bawaan**: pemeriksaan informasi dasar website.
 - **WhatWeb**: technology fingerprinting tambahan.
 - **testssl.sh**: memeriksa certificate, certificate chain, TLS 1.0, TLS 1.1, TLS 1.2, TLS 1.3, weak cipher, cryptographic configuration.
-- **Nuclei**: mendeteksi CVE, exposure, misconfiguration, technology vulnerability, safe vulnerability checks. Nuclei harus menggunakan profil template yang telah disetujui.
+- **Nuclei**: mendeteksi CVE, exposure, misconfiguration, technology vulnerability, safe vulnerability checks. Nuclei menggunakan profil template di bagian 26.
 - **Nmap**: digunakan secara terbatas untuk port web, identifikasi service, dan service version jika tersedia. Tidak menggunakan aggressive exploitation.
 - **OWASP ZAP** (opsional): passive scan, HTTP security analysis, passive security alerts. Tidak menjalankan active exploitation pada versi awal SIPRIKA.
 
@@ -143,7 +138,7 @@ Model tidak perlu dilatih kembali di dalam SIPRIKA. Model digunakan hanya untuk 
 
 ### Fungsi Model
 
-Model menerima hasil pemeriksaan yang sudah dinormalisasi. Contoh input: informasi target, hasil httpx, security headers, TLS, technology, Nuclei findings, exposure, CVE, CVSS, evidence.
+Model menerima hasil pemeriksaan yang sudah dinormalisasi. Contoh input: informasi target, informasi HTTP, security headers, TLS, technology, Nuclei findings, exposure, CVE, CVSS, evidence.
 
 Model membantu menghasilkan:
 
@@ -166,7 +161,7 @@ Pipeline SIPRIKA:
 ```
 Target Website
 ↓
-Scanner (httpx, WhatWeb, testssl.sh, Nuclei, Nmap, ZAP Passive)
+Scanner (Pemeriksaan HTTP bawaan, WhatWeb, testssl.sh, Nuclei, Nmap, ZAP Passive)
 ↓
 Raw Scanner Result
 ↓
@@ -355,7 +350,9 @@ Risk Register
 
 SIPRIKA menggunakan file template Risk Register yang diberikan sebagai template utama. SIPRIKA hanya perlu mengisi sheet **Perangkat Lunak** (ASET: PERANGKAT LUNAK). Setiap risiko unik per website menjadi satu baris Risk Register. Sumber isi setiap kolom dijelaskan di bagian 25.
 
-Kolom yang tidak dapat diketahui dari pemeriksaan teknis seperti Kontrol Saat Ini, Target/Jadwal Implementasi, Penanggung Jawab, Residual Risk, dan Risk Owner tidak boleh dibuat-buat oleh AI maupun sistem. Kolom tersebut dibiarkan kosong untuk diisi user.
+Kolom diisi mengikuti contoh baris PL-001 pada template, kecuali Target/Jadwal Implementasi, Penanggung Jawab, dan Risk Owner yang dikosongkan untuk diisi staf secara manual. Kolom Residual Risk diisi sebagai perkiraan residual setelah Rencana Aksi dijalankan (bagian 24.6). AI hanya mengisi kolom deskriptif yang disebut di bagian 25.
+
+SIPRIKA tidak boleh mengisi kolom dengan informasi yang tidak didukung evidence atau aturan tertulis di dokumen ini.
 
 SIPRIKA harus mempertahankan: format template, formula, dropdown, Risk Matrix, sheet Ringkasan, dan sheet pendukung.
 
@@ -365,7 +362,7 @@ SIPRIKA harus mempertahankan: format template, formula, dropdown, Risk Matrix, s
 - **FR-02 Target Validation**: Melakukan normalisasi URL, DNS validation, redirect validation, dan SSRF protection.
 - **FR-03 Scan Mode**: User dapat memilih Cepat atau Standar.
 - **FR-04 Queue**: Beberapa website diproses menggunakan antrean.
-- **FR-05 Scanner Integration**: SIPRIKA dapat menjalankan dan membaca output httpx, testssl.sh, Nuclei, WhatWeb, Nmap, ZAP Passive.
+- **FR-05 Scanner Integration**: SIPRIKA menjalankan pemeriksaan HTTP bawaan serta dapat menjalankan dan membaca output testssl.sh, Nuclei, WhatWeb, Nmap, ZAP Passive.
 - **FR-06 Finding Normalization**: Output scanner diubah menjadi struktur finding yang sama.
 - **FR-07 Deduplication**: Finding yang sama dari beberapa scanner digabung.
 - **FR-08 AI Analysis**: Finding dikirim ke model lokal untuk membantu menghasilkan analisis risiko terstruktur.
@@ -376,14 +373,14 @@ SIPRIKA harus mempertahankan: format template, formula, dropdown, Risk Matrix, s
 
 ## 19. Tech Stack
 
-- **Backend**: Laravel / PHP
+- **Backend**: Laravel 13 / PHP 8.3
 - **Frontend**: Blade + Tailwind CSS + Alpine.js
-- **Database**: PostgreSQL
-- **Queue**: Laravel Queue + Redis
-- **Scanner**: httpx, Nuclei, testssl.sh, WhatWeb, Nmap, OWASP ZAP Passive
+- **Database**: SQLite untuk pengembangan, PostgreSQL sebagai target akhir
+- **Queue**: Laravel Queue driver database untuk pengembangan, Redis sebagai target akhir
+- **Scanner**: pemeriksaan HTTP, header, cookie, dan TLS bawaan PHP, Nuclei, testssl.sh, WhatWeb, Nmap, OWASP ZAP Passive
 - **AI**: model qwen2.5-7b-instruct.Q4_K_M.gguf, runtime llama.cpp, mode local inference. Tidak membutuhkan API LLM eksternal.
 - **Reporting**: PhpSpreadsheet untuk menghasilkan file Excel Risk Register.
-- **Deployment versi awal**: Windows + WSL2 / Linux, atau Docker.
+- **Deployment versi awal**: Windows + Laragon, tool eksternal dijalankan lewat WSL Ubuntu.
 
 ## 20. Sistem Utama
 
@@ -396,7 +393,7 @@ TARGET QUEUE
 ↓
 SCANNER ORCHESTRATOR
 ↓
-httpx / WhatWeb / testssl / Nuclei / Nmap / ZAP Passive
+Pemeriksaan HTTP bawaan / WhatWeb / testssl / Nuclei / Nmap / ZAP Passive
 ↓
 OBSERVATION
 ↓
@@ -473,6 +470,8 @@ Prinsip utama SIPRIKA:
 7. Pemeriksaan yang tidak dapat dilakukan oleh tool yang tersedia diberi status `NOT ASSESSED`, bukan `PASS`.
 8. Coverage adalah daftar semua pemeriksaan beserta statusnya (`PASS`, `FAIL`, `ERROR`, `NOT ASSESSED`) untuk setiap website, dan ditampilkan di halaman hasil. Mode Cepat hanya memeriksa halaman utama, dan batasan ini ditampilkan di Coverage.
 9. Semua permintaan memakai User-Agent tetap, contoh: `SIPRIKA/1.0 (Diskominfo Jember)`, supaya admin website dapat mengenali pemeriksaan.
+10. Setiap kunci katalog di bagian 23.1 yang tidak diperiksa pada suatu mode, baik karena profil mode, tool tidak tersedia, maupun dibatasi WAF, dicatat `NOT ASSESSED` di Coverage. Kunci tersebut tidak boleh dianggap `PASS` dan halaman hasil tidak boleh menyiratkan bahwa website aman untuk pemeriksaan itu.
+11. Redirect ke host yang sama atau host yang hanya berbeda awalan `www.` tetap diikuti, dengan pemeriksaan IP ulang. Redirect ke host lain tidak diikuti. Jika redirect tidak diikuti, pemeriksaan header dan cookie dicatat `NOT ASSESSED` karena respons redirect bukan halaman website, dan alamat tujuan redirect dicatat di evidence supaya dapat diperiksa sebagai target terpisah.
 
 ## 23. Katalog Finding Mode Cepat
 
@@ -582,52 +581,68 @@ IR dan Level dihitung dengan tabel RiskMatrix dan RiskLevel di sheet Peta Risiko
 - Observation berstatus `PASS`, `INFO`, `N/A`, `ERROR`, dan `NOT ASSESSED` tidak menjadi baris Risk Register.
 - Satu baris Risk Register adalah satu website dengan satu kunci finding. Jika finding yang sama muncul di beberapa endpoint pada website yang sama, endpoint digabung sebagai evidence dalam baris yang sama.
 
+### 24.6 Residual Risk
+
+Residual Risk adalah perkiraan risiko yang tersisa setelah Rencana Aksi dijalankan, bukan hasil pengukuran. Rencana Aksi menghilangkan kerawanan sehingga menurunkan kemungkinan, sedangkan dampak jika tetap terjadi tidak berubah.
+
+- Apakah Terdapat Residual Risk: selalu "Ya", karena risiko tidak pernah benar-benar nol.
+- Dampak residual: sama dengan Dampak inherent.
+- Kemungkinan residual: 1 Hampir Tidak Terjadi.
+- RR dan Status residual dihitung rumus template.
+
+Nilai di bagian ini disimpan di file konfigurasi supaya dapat diubah tanpa mengubah program.
+
 ## 25. Pengisian Kolom Risk Register (sheet Perangkat Lunak)
 
 | Kolom | Isi | Sumber |
 |---|---|---|
 | A Risk No | PL-001, PL-002, dan seterusnya | Sistem |
 | B Jenis Risiko | Selalu "Negatif" | Sistem |
-| C Aset | Nama website dan domain, contoh: "Website Dinas X (dinasx.jemberkab.go.id)" | Hasil httpx |
+| C Aset | Nama website dan domain, contoh: "Website Dinas X (dinasx.jemberkab.go.id)" | Pemeriksaan HTTP |
 | D Ancaman | Dari katalog | Katalog |
 | E Kerawanan | Dari katalog ditambah detail evidence | Katalog dan evidence |
 | F Kategori | Dari katalog, harus salah satu dari 12 kategori di template | Katalog |
 | G Dampak (deskriptif) | Kalimat dampak | AI, cadangan teks katalog |
 | H Area Dampak | Dari katalog, harus nilai dropdown | Katalog |
-| I Kontrol Saat Ini | Dikosongkan | User |
+| I Kontrol Saat Ini | "Belum teridentifikasi dari pemeriksaan eksternal" | Sistem |
 | J Dampak, K Kemungkinan | Label sesuai dropdown | Risk Engine |
 | L IR, M Level Risiko | Tidak ditulis, dihitung rumus template | Rumus Excel |
-| N Keputusan Penanganan | "Ya" jika Not Acceptable, selain itu kosong | Risk Engine |
+| N Keputusan Penanganan | "Ya" untuk semua baris, karena setiap finding memiliki Rencana Aksi (sesuai contoh DI-001 pada template) | Sistem |
 | O Prioritas Risiko | Urutan IR tertinggi per website, 1 adalah tertinggi | Risk Engine |
-| P Opsi Penanganan | "Mitigasi Risiko" jika Not Acceptable, selain itu kosong | Risk Engine |
+| P Opsi Penanganan | "Mitigasi Risiko" untuk semua baris | Sistem |
 | Q Rencana Aksi | Rekomendasi penanganan | AI, cadangan teks katalog |
 | R Keluaran | Hasil yang diharapkan setelah ditangani | Katalog |
-| S Target/Jadwal, T Penanggung Jawab | Dikosongkan | User |
-| U, V, W Residual Risk | Dikosongkan | User |
+| S Target/Jadwal | Dikosongkan, diisi staf secara manual | Staf |
+| T Penanggung Jawab | Dikosongkan, diisi staf secara manual | Staf |
+| U Apakah Terdapat Residual Risk | "Ya" | Bagian 24.6 |
+| V Dampak, W Kemungkinan (residual) | Sesuai bagian 24.6 | Risk Engine |
 | X, Y, dan kolom AB sampai AI | Tidak ditulis, dihitung rumus template | Rumus Excel |
 | Z Rencana Kontrol Tambahan | Kontrol tambahan | AI, cadangan teks katalog |
-| AA Risk Owner | Dikosongkan | User |
+| AA Risk Owner | Dikosongkan, diisi staf secara manual | Staf |
 
-## 26. Batas Pemindaian
+Tab Risk Register di web menampilkan nilai yang sama dengan file Excel, termasuk kolom hasil rumus.
 
 ## 26. Batas Pemindaian
 
 - Daftar domain yang boleh dipindai diatur lewat `SCAN_ALLOWED_DOMAINS` di `.env`. Beberapa domain dipisah koma, contoh: `SCAN_ALLOWED_DOMAINS=jemberkab.go.id`. Subdomain dari domain tersebut ikut diizinkan. URL di luar daftar ditolak saat input.
 - Jika `SCAN_ALLOWED_DOMAINS` kosong atau bernilai `*`, semua domain diizinkan. Pengguna bertanggung jawab memastikan setiap website yang diperiksa sudah mendapat izin.
 - URL berupa alamat IP (IPv4 maupun IPv6) dan localhost ditolak saat input.
-- Saat pemeriksaan, domain yang mengarah ke IP privat dihentikan sebelum ada permintaan HTTP (perlindungan SSRF). Redirect ke domain lain tidak diikuti.
+- Saat pemeriksaan, domain yang mengarah ke IP privat dihentikan sebelum ada permintaan HTTP (perlindungan SSRF). Aturan redirect mengikuti bagian 22 poin 11.
 - Satu website diperiksa dalam satu waktu, sesuai urutan antrean.
-- Kecepatan Nuclei maksimal 5 request per detik per website.
-- Setiap tool punya batas waktu sendiri. Mode Cepat maksimal 10 menit per website. Tool yang melewati batas waktu dicatat `ERROR`, dan website diberi status `PARTIAL`.
-- Profil Nuclei Mode Cepat hanya memakai tag exposure, misconfig, tech, dan ssl.
+- Kecepatan Nuclei maksimal 15 request per detik per website.
+- Batas waktu per website: Mode Cepat 10 menit, Mode Standar 45 menit. Batas waktu Nuclei 30 menit. Tool yang melewati batas waktu dicatat `ERROR` dan website diberi status `PARTIAL`, tetapi hasil yang sempat didapat tetap disimpan.
+- Profil Nuclei per mode disimpan di config `siprika.tools.nuclei.profiles`:
+  - Mode Cepat: 10 template informasi penting ditambah template bertag exposure, misconfig, tech, dan ssl dengan severity high dan critical (sekitar 1.000 request, sekitar 2 menit).
+  - Mode Standar: template bertag exposure, misconfig, tech, ssl, dan cve dengan semua severity (sekitar 7.000 request, sekitar 8 menit).
+- Kunci katalog yang tidak tercakup profil suatu mode dicatat `NOT ASSESSED` sesuai bagian 22 poin 10.
 - Semua mode wajib mengecualikan template bertag intrusive, dos, fuzz, default-login, dan template lain yang mencoba login atau menebak kredensial.
 - Setiap pemeriksaan dicatat: waktu, target, mode, dan tool yang dijalankan.
 
 ## 27. Aturan Tambahan AI
 
 - AI hanya menerima JSON finding hasil normalizer, tidak pernah URL atau hasil mentah scanner.
-- Setiap nomor CVE, versi software, dan URL di jawaban AI harus ada di data input. Jika tidak, jawaban ditolak dan dipakai teks cadangan dari katalog.
-- Hasil AI disimpan per kunci finding dan dipakai ulang untuk website lain dengan finding yang sama.
+- Setiap nomor CVE, versi software, dan URL di jawaban AI harus ada di evidence website yang sedang diproses. Jika tidak, jawaban ditolak dan dipakai teks cadangan dari katalog.
+- Hasil AI disimpan per kunci finding dan dipakai ulang untuk website lain dengan finding yang sama. Karena dipakai ulang, teks yang disimpan harus bersifat umum dan tidak memuat detail khusus satu website (nama file, nama cookie, versi, URL). Detail khusus website ditambahkan sistem dari evidence.
 - Batas waktu satu permintaan AI adalah 60 detik. Lewat batas waktu, dipakai teks cadangan.
 - Teks yang berasal dari AI ditandai di database, supaya dapat dibedakan dari teks katalog.
 
@@ -637,7 +652,8 @@ IR dan Level dihitung dengan tabel RiskMatrix dan RiskLevel di sheet Peta Risiko
 - Rumus dan dropdown di template hanya tersedia di baris 7 sampai 11. Export wajib menyalin format, rumus (kolom L, M, X, Y, AB, AC, AF, AG, AH), dan dropdown ke setiap baris baru, serta memperluas rumus SUM di baris total.
 - Kolom yang berisi rumus tidak ditulis nilainya oleh SIPRIKA.
 - Dropdown Kategori mengambil daftar dari sheet List Kategori Risiko Keamanan dan wajib tetap berfungsi setelah export.
-- Sheet selain Perangkat Lunak tidak diubah.
+- Sheet Ringkasan wajib menampilkan jumlah risiko Inherent dan Residual sesuai isi sheet Perangkat Lunak.
+- Sheet selain Perangkat Lunak dan Ringkasan tidak diubah.
 - Setiap perubahan kode export diuji dengan membuka file hasilnya di Microsoft Excel: tidak ada pesan error, rumus terhitung, dan dropdown berfungsi.
 
 ## 29. Definition of Done MVP

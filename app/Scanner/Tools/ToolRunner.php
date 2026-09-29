@@ -2,7 +2,6 @@
 
 namespace App\Scanner\Tools;
 
-use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
@@ -35,9 +34,21 @@ class ToolRunner
     }
 
     /**
+     * Jalankan tool dan tunggu sampai selesai.
+     *
      * @param  list<string>  $arguments
      */
     public function run(string $tool, array $arguments, int $timeout, ?string $workingDirectory = null): ToolResult
+    {
+        return $this->start($tool, $arguments, $timeout, $workingDirectory)->wait();
+    }
+
+    /**
+     * Mulai tool di latar belakang. Hasilnya dibaca dengan RunningTool::wait().
+     *
+     * @param  list<string>  $arguments
+     */
+    public function start(string $tool, array $arguments, int $timeout, ?string $workingDirectory = null): RunningTool
     {
         $command = [...($this->command($tool) ?? []), ...$arguments];
 
@@ -49,13 +60,6 @@ class ToolRunner
             $pending = $pending->path($workingDirectory);
         }
 
-        try {
-            $result = $pending->run($command);
-        } catch (ProcessTimedOutException $e) {
-            // Output yang sudah terkumpul sebelum batas waktu tetap dikembalikan supaya evidence tidak hilang
-            return new ToolResult(false, $e->result->output(), $e->result->errorOutput(), null, true);
-        }
-
-        return new ToolResult($result->successful(), $result->output(), $result->errorOutput(), $result->exitCode(), false);
+        return new RunningTool($pending->start($command));
     }
 }

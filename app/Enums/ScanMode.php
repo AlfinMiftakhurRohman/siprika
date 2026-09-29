@@ -23,6 +23,8 @@ enum ScanMode: string
 
     /**
      * Urutan pemeriksaan Mode Standar. Mode Cepat memakai sebagian dari daftar ini (bagian 3 dan 4).
+     * Nuclei berjalan di latar belakang (BackgroundCheck), sehingga pemeriksaan sesudahnya (Nmap, testssl.sh,
+     * WhatWeb, ZAP) dikerjakan sambil menunggu Nuclei yang dibatasi 15 request per detik.
      *
      * @var list<class-string<Check>>
      */
@@ -34,8 +36,8 @@ enum ScanMode: string
         TechnologyCheck::class,
         TlsCheck::class,
         ExposureCheck::class,
-        PortCheck::class,
         NucleiCheck::class,
+        PortCheck::class,
         TestsslCheck::class,
         WhatWebCheck::class,
         ZapPassiveCheck::class,
@@ -67,7 +69,7 @@ enum ScanMode: string
     {
         return match ($this) {
             self::Quick => 'Gambaran umum dalam waktu singkat: validasi DNS, HTTP, security headers, cookie, TLS dasar, teknologi, exposure terbatas, dan Nuclei profil ringan. Maksimal '.intdiv($this->timeout(), 60).' menit per website.',
-            self::Standard => 'Semua pemeriksaan Mode Cepat ditambah exposure lengkap, port/web service (Nmap), Nuclei termasuk CVE, TLS lengkap (testssl.sh), dan WhatWeb. Tool eksternal yang belum dipasang dicatat NOT ASSESSED.',
+            self::Standard => 'Semua pemeriksaan Mode Cepat ditambah exposure lengkap, port/web service (Nmap), Nuclei termasuk CVE, TLS lengkap (testssl.sh), WhatWeb, dan OWASP ZAP passive scan. Tool eksternal yang belum dipasang dicatat NOT ASSESSED.',
         };
     }
 

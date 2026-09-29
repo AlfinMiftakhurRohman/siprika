@@ -71,7 +71,7 @@ class RiskRegisterExportTest extends TestCase
 
         $this->assertSame($impact, $catalog['impact']);
         $this->assertSame($likelihood, $catalog['likelihood']);
-        $this->assertSame($ir, RiskEngine::inherentRisk($impact, $likelihood));
+        $this->assertSame($ir, RiskEngine::riskValue($impact, $likelihood));
         $this->assertSame($level, RiskEngine::level($impact, $likelihood));
         $this->assertSame($status, RiskEngine::status($ir));
     }
@@ -96,6 +96,10 @@ class RiskRegisterExportTest extends TestCase
     private function items(int $count): Collection
     {
         return collect(range(1, $count))->map(fn (int $i) => new RiskRegisterItem([
+            'residual_impact' => RiskEngine::residual($i % 2 ? 4 : 2)[0],
+            'residual_likelihood' => RiskEngine::residual($i % 2 ? 4 : 2)[1],
+            'residual_risk' => RiskEngine::riskValue(...RiskEngine::residual($i % 2 ? 4 : 2)),
+            'residual_status' => RiskRegisterItem::ACCEPTABLE,
             'asset' => "Website Dinas {$i} (dinas{$i}.jemberkab.go.id)",
             'threat' => 'Terjadi peretasan pada aplikasi',
             'vulnerability' => 'Lemahnya mekanisme kriptografi aplikasi (header Strict-Transport-Security tidak ditemukan pada respons HTTPS)',
@@ -115,9 +119,12 @@ class RiskRegisterExportTest extends TestCase
         ]));
     }
 
-    private function export(int $count): Spreadsheet
+    /**
+     * @param  Collection<int, RiskRegisterItem>|null  $items
+     */
+    private function export(int $count, ?Collection $items = null): Spreadsheet
     {
-        (new RiskRegisterExporter)->export($this->items($count), $this->path);
+        (new RiskRegisterExporter)->export($items ?? $this->items($count), $this->path);
 
         return IOFactory::load($this->path);
     }
@@ -141,19 +148,28 @@ class RiskRegisterExportTest extends TestCase
         $this->assertSame('Website Dinas 1 (dinas1.jemberkab.go.id)', $this->text($sheet, 'C7'));
         $this->assertSame('Signifikan', $this->text($sheet, 'J7'));
         $this->assertSame('Hampir Pasti Terjadi', $this->text($sheet, 'K7'));
+        $this->assertSame('Belum teridentifikasi dari pemeriksaan eksternal', $this->text($sheet, 'I7'));
         $this->assertSame('Ya', $this->text($sheet, 'N7'));
         $this->assertSame(1, $this->text($sheet, 'O7'));
         $this->assertSame('Mitigasi Risiko', $this->text($sheet, 'P7'));
         $this->assertSame('Pengguna berpotensi mengakses layanan tanpa HTTPS & "enkripsi" <aman>.', $this->text($sheet, 'G7'));
 
-        // Kolom yang diisi user tetap kosong
-        foreach (['I', 'S', 'T', 'U', 'V', 'W', 'AA'] as $column) {
+        // Kolom yang diisi staf tetap kosong (bagian 17)
+        foreach (['S', 'T', 'AA'] as $column) {
             $this->assertNull($this->text($sheet, "{$column}7"), $column);
         }
 
-        // Baris Acceptable tidak diberi keputusan penanganan
-        $this->assertNull($this->text($sheet, 'N8'));
-        $this->assertNull($this->text($sheet, 'P8'));
+        // Keputusan dan opsi penanganan diisi untuk semua baris, termasuk yang Acceptable (bagian 25)
+        $this->assertSame('Acceptable', $sheet->getCell('AF8')->getCalculatedValue());
+        $this->assertSame('Ya', $this->text($sheet, 'N8'));
+        $this->assertSame('Mitigasi Risiko', $this->text($sheet, 'P8'));
+
+        // Residual (bagian 24.6): ada, dampak sama dengan inherent, kemungkinan Hampir Tidak Terjadi
+        $this->assertSame('Ya', $this->text($sheet, 'U7'));
+        $this->assertSame('Signifikan', $this->text($sheet, 'V7'));
+        $this->assertSame('Hampir Tidak Terjadi', $this->text($sheet, 'W7'));
+        $this->assertSame('Kurang Signifikan', $this->text($sheet, 'V8'));
+        $this->assertSame('Hampir Tidak Terjadi', $this->text($sheet, 'W8'));
 
         // Rumus template disalin dan dihitung dari matriks sheet Peta Risiko
         $this->assertSame('=INDEX(RiskMatrix,MATCH(K13,RangeKemungkinan,0),MATCH(J13,RangeDampak,0))', $this->text($sheet, 'L13'));
@@ -162,6 +178,15 @@ class RiskRegisterExportTest extends TestCase
         $this->assertEquals(7, $sheet->getCell('L8')->getCalculatedValue());
         $this->assertSame('Not Acceptable', $sheet->getCell('AF7')->getCalculatedValue());
         $this->assertSame('PL-007', $this->text($sheet, 'A13'));
+
+        // RR dan status residual dihitung rumus template, tidak ditulis nilainya
+        $this->assertSame('=IF(U13="Ya",(INDEX(RiskMatrix,MATCH(W13,RangeKemungkinan,0),MATCH(V13,RangeDampak,0))),"N/A")', $this->text($sheet, 'X13'));
+        $this->assertSame('=IF(ISNUMBER(X13),IF(X13>=11,"Not Acceptable","Acceptable"),"N/A")', $this->text($sheet, 'Y13'));
+        $this->assertEquals(8, $sheet->getCell('X7')->getCalculatedValue());
+        $this->assertSame('Acceptable', $sheet->getCell('Y7')->getCalculatedValue());
+        $this->assertEquals(3, $sheet->getCell('X8')->getCalculatedValue());
+        $this->assertEquals(7, $sheet->getCell('AB14')->getCalculatedValue());
+        $this->assertEquals(0, $sheet->getCell('AC14')->getCalculatedValue());
 
         // Baris total pindah ke bawah data dan SUM diperluas
         $this->assertSame('=SUM(AG7:AG13)', $this->text($sheet, 'AG14'));
@@ -189,6 +214,70 @@ class RiskRegisterExportTest extends TestCase
         $this->assertSame("='Perangkat Lunak'!AB14", $summary->getCell('F11')->getValue());
         // Sheet aset lain tidak berubah
         $this->assertSame("='Data dan Informasi'!AI12", $summary->getCell('B10')->getValue());
+    }
+
+    public function test_ringkasan_menghitung_inherent_dan_residual_sesuai_sheet_perangkat_lunak(): void
+    {
+        $summary = $this->export(7)->getSheetByName('Ringkasan');
+
+        // Inherent: 3 Acceptable (IR 7) dan 4 Not Acceptable (IR 23)
+        $this->assertEquals(3, $summary->getCell('C11')->getCalculatedValue());
+        $this->assertEquals(4, $summary->getCell('D11')->getCalculatedValue());
+        // Residual: semua Acceptable karena kemungkinan turun ke Hampir Tidak Terjadi
+        $this->assertEquals(7, $summary->getCell('F11')->getCalculatedValue());
+        $this->assertEquals(0, $summary->getCell('G11')->getCalculatedValue());
+
+        // Persentase Acceptable dibagi jumlah risiko; rumus template E11 keliru membagi dengan jumlah Unacceptable
+        $this->assertSame('=IFERROR(C11/B11,0)', $summary->getCell('E11')->getValue());
+        $this->assertEqualsWithDelta(3 / 7, $summary->getCell('E11')->getCalculatedValue(), 0.0001);
+        $this->assertSame('=IFERROR(F11/B11,0)', $summary->getCell('H11')->getValue());
+        $this->assertEquals(1, $summary->getCell('H11')->getCalculatedValue());
+    }
+
+    public function test_ringkasan_tanpa_risiko_tidak_menghasilkan_pembagian_nol(): void
+    {
+        $summary = $this->export(0, collect())->getSheetByName('Ringkasan');
+
+        $this->assertEquals(0, $summary->getCell('B11')->getCalculatedValue());
+        $this->assertEquals(0, $summary->getCell('E11')->getCalculatedValue());
+        $this->assertEquals(0, $summary->getCell('H11')->getCalculatedValue());
+    }
+
+    public function test_rumus_persentase_semua_baris_aset_ringkasan_diperbaiki_tanpa_merusak_rumus_shared(): void
+    {
+        (new RiskRegisterExporter)->export($this->items(3), $this->path);
+
+        $zip = new ZipArchive;
+        $zip->open($this->path);
+        $xml = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+
+        // Pada template, E11 adalah induk rumus shared E11:E14 dan H10 induk rumus shared H10:H14
+        $this->assertDoesNotMatchRegularExpression('/<f t="shared"[^>]*si="[01]"/', $xml);
+
+        $summary = IOFactory::load($this->path)->getSheetByName('Ringkasan');
+
+        // Template membagi dengan jumlah Unacceptable (C/D) pada E11 sampai E14
+        foreach (range(10, 14) as $row) {
+            $this->assertSame("=IFERROR(C{$row}/B{$row},0)", $summary->getCell("E{$row}")->getValue(), "E{$row}");
+            $this->assertSame("=IFERROR(F{$row}/B{$row},0)", $summary->getCell("H{$row}")->getValue(), "H{$row}");
+        }
+
+        // Nilai contoh bawaan sheet aset lain: 1 Acceptable dari 2 risiko
+        $this->assertEquals(0.5, $summary->getCell('E12')->getCalculatedValue());
+        $this->assertEquals(0.5, $summary->getCell('H12')->getCalculatedValue());
+    }
+
+    public function test_baris_ringkasan_yang_merujuk_sheet_lain_dari_labelnya_diarahkan_ke_sheet_yang_benar(): void
+    {
+        $summary = $this->export(3)->getSheetByName('Ringkasan');
+
+        // Template: baris "SDM & Pihak Ketiga" mengambil total sheet 'Sarana Pendukung'
+        $this->assertSame("='SDM & Pihak Ketiga'!AI12", $summary->getCell('B14')->getValue());
+        $this->assertSame("='SDM & Pihak Ketiga'!AC12", $summary->getCell('G14')->getValue());
+        // Baris lain yang sudah benar tidak berubah
+        $this->assertSame("='Sarana Pendukung'!AI12", $summary->getCell('B13')->getValue());
+        $this->assertSame("='Perangkat Keras'!AG12", $summary->getCell('C12')->getValue());
     }
 
     public function test_data_sedikit_tetap_menyisakan_baris_template_dan_contoh_dihapus(): void

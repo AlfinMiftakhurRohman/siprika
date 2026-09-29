@@ -2,6 +2,9 @@
 
 namespace App\Risk;
 
+use App\Ai\AiInput;
+use App\Ai\AiOutputValidator;
+use App\Ai\SiteEvidence;
 use App\Enums\Severity;
 use App\Models\AiAnalysis;
 use App\Models\FindingEvidence;
@@ -15,6 +18,8 @@ use App\Models\ScanTarget;
  */
 class RiskEngine
 {
+    public function __construct(private AiOutputValidator $validator = new AiOutputValidator) {}
+
     /**
      * Susun ulang baris Risk Register untuk satu website.
      */
@@ -34,7 +39,7 @@ class RiskEngine
             $rule = $this->rule($finding);
 
             if ($rule !== null) {
-                $rows[] = $this->buildRow($target, $finding, $rule, $aiAnalyses->get($finding->finding_key));
+                $rows[] = $this->buildRow($target, $finding, $rule, $this->validAnalysis($aiAnalyses->get($finding->finding_key), $target, $finding, $rule));
             }
         }
 
@@ -45,6 +50,23 @@ class RiskEngine
         foreach ($rows as $index => $row) {
             $target->riskItems()->create($row + ['priority' => $index + 1]);
         }
+    }
+
+    /**
+     * Hasil AI tersimpan dipakai hanya jika lolos validasi terhadap evidence website ini (bagian 27), karena
+     * hasil itu dibuat saat memeriksa website lain. Jika tidak lolos, dipakai teks katalog.
+     *
+     * @param  array<string, mixed>  $rule
+     */
+    private function validAnalysis(?AiAnalysis $analysis, ScanTarget $target, ScanFinding $finding, array $rule): ?AiAnalysis
+    {
+        if ($analysis === null) {
+            return null;
+        }
+
+        $reason = $this->validator->reject($analysis->only(AiOutputValidator::KEYS), AiInput::build($finding, $rule), SiteEvidence::from($finding, $target));
+
+        return $reason === null ? $analysis : null;
     }
 
     /**
@@ -86,9 +108,25 @@ class RiskEngine
         ];
     }
 
-    public static function inherentRisk(int $impact, int $likelihood): int
+    /**
+     * Nilai risiko dari tabel RiskMatrix template, dipakai untuk IR maupun RR.
+     */
+    public static function riskValue(int $impact, int $likelihood): int
     {
         return config('siprika_risk.matrix')[$likelihood][$impact];
+    }
+
+    /**
+     * Dampak dan kemungkinan residual (bagian 24.6): dampak tetap, kemungkinan turun sesuai config.
+     *
+     * @return array{0: int, 1: int}
+     */
+    public static function residual(int $impact): array
+    {
+        return [
+            (int) (config('siprika_risk.residual.impact') ?? $impact),
+            (int) config('siprika_risk.residual.likelihood'),
+        ];
     }
 
     public static function level(int $impact, int $likelihood): string
@@ -112,7 +150,9 @@ class RiskEngine
     {
         $impact = (int) $rule['impact'];
         $likelihood = (int) $rule['likelihood'];
-        $inherentRisk = self::inherentRisk($impact, $likelihood);
+        $inherentRisk = self::riskValue($impact, $likelihood);
+        [$residualImpact, $residualLikelihood] = self::residual($impact);
+        $residualRisk = self::riskValue($residualImpact, $residualLikelihood);
 
         return [
             'scan_finding_id' => $finding->id,
@@ -128,6 +168,10 @@ class RiskEngine
             'inherent_risk' => $inherentRisk,
             'risk_level' => self::level($impact, $likelihood),
             'risk_status' => self::status($inherentRisk),
+            'residual_impact' => $residualImpact,
+            'residual_likelihood' => $residualLikelihood,
+            'residual_risk' => $residualRisk,
+            'residual_status' => self::status($residualRisk),
             'action_plan' => $ai?->recommendation ?? $rule['recommendation'],
             'output' => $rule['output'],
             'additional_control' => $ai?->additional_control ?? $rule['additional_control'],
@@ -140,18 +184,22 @@ class RiskEngine
      */
     private function vulnerabilityText(string $base, ScanFinding $finding): string
     {
-        // Evidence Nuclei ("template ... cocok pada ...") hanya dipakai jika scanner lain tidak menemukan hal yang sama,
-        // karena penjelasan pemeriksaan bawaan atau testssl.sh lebih mudah dibaca di Risk Register
-        $described = $finding->evidences->reject(fn (FindingEvidence $e) => $e->source === 'nuclei');
-
-        $details = ($described->isNotEmpty() ? $described : $finding->evidences)
-            ->sortBy(fn (FindingEvidence $e) => $e->source === 'internal' ? 0 : 1)
-            ->pluck('detail')
-            ->unique()
-            ->values();
-
         if (str_starts_with($finding->finding_key, 'nuclei:')) {
             $details = collect([$finding->title.($finding->cve ? " ({$finding->cve})" : '')]);
+        } else {
+            // Satu penjelasan per endpoint dari sumber yang paling mudah dibaca: pemeriksaan bawaan, lalu tool lain
+            // (testssl.sh, ZAP), lalu Nuclei ("template ... cocok pada ..."). Sumber lain untuk endpoint yang sama
+            // menyatakan hal yang sama sehingga tidak diulang, sedangkan endpoint yang hanya ditemukan tool tetap tampil.
+            $details = $finding->evidences
+                ->sortBy(fn (FindingEvidence $e) => match ($e->source) {
+                    'internal' => 0,
+                    'nuclei' => 2,
+                    default => 1,
+                })
+                ->groupBy(fn (FindingEvidence $e) => rtrim(strtolower((string) $e->endpoint), '/'))
+                ->flatMap(fn ($group) => $group->where('source', $group->first()->source)->pluck('detail'))
+                ->unique()
+                ->values();
         }
 
         if ($details->isEmpty()) {

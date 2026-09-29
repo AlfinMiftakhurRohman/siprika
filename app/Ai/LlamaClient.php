@@ -18,6 +18,7 @@ Tugas Anda menjelaskan temuan tersebut untuk Risk Register dalam bahasa Indonesi
 
 Aturan:
 - Gunakan hanya informasi dari JSON input. Jangan menambah temuan, nomor CVE, versi software, nama produk, atau URL yang tidak ada di input.
+- Jawaban dipakai ulang untuk website lain dengan temuan yang sama, jadi tulis secara umum: jangan menyebut nama website, host, URL, nama file, nama cookie, atau nomor versi software.
 - Jangan menyatakan website aman atau tidak aman secara keseluruhan.
 - Setiap nilai berupa 1 sampai 2 kalimat.
 - Jawab HANYA dengan satu objek JSON dengan kunci berikut:

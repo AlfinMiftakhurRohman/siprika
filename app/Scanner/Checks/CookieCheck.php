@@ -33,10 +33,19 @@ class CookieCheck implements Check
             return;
         }
 
+        // Bagian 22.11: cookie pada respons redirect yang tidak diikuti bukan cookie halaman website
+        if ($context->homepage?->isRedirectStopped()) {
+            $context->observe('cookie-security', $label, 'internal', ObservationStatus::NotAssessed, $context->homepage->stoppedRedirectNote());
+
+            return;
+        }
+
         $responses = $this->httpsResponses($context);
 
         if ($responses === []) {
-            $context->observe('cookie-security', $label, 'internal', ObservationStatus::NotApplicable, 'Tidak ada respons HTTPS untuk diperiksa.');
+            $context->httpsResponse?->isRedirectStopped()
+                ? $context->observe('cookie-security', $label, 'internal', ObservationStatus::NotAssessed, $context->httpsResponse->stoppedRedirectNote())
+                : $context->observe('cookie-security', $label, 'internal', ...$context->httpsMissingStatus('pemeriksaan cookie'));
 
             return;
         }
@@ -93,6 +102,8 @@ class CookieCheck implements Check
     }
 
     /**
+     * Respons HTTPS halaman utama, tanpa rantai redirect yang tidak diikuti (bagian 22.11).
+     *
      * @return list<HttpExchange>
      */
     private function httpsResponses(ScanContext $context): array
@@ -100,6 +111,10 @@ class CookieCheck implements Check
         $responses = [];
 
         foreach ([$context->homepage, $context->httpsResponse] as $exchange) {
+            if ($exchange?->isRedirectStopped()) {
+                continue;
+            }
+
             foreach ($exchange?->allResponses() ?? [] as $response) {
                 if ($response->isHttps()) {
                     $responses[$response->url.'#'.$response->status] = $response;

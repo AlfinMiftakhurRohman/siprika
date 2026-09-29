@@ -10,6 +10,8 @@ class ToolResult
         public readonly string $errorOutput,
         public readonly ?int $exitCode,
         public readonly bool $timedOut,
+        // Lama tool berjalan (detik)
+        public readonly float $seconds = 0,
     ) {}
 
     public function errorSummary(): string

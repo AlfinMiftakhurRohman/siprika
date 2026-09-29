@@ -1,3 +1,5 @@
+@use('App\Support\SourceLabel')
+
 @php
     $overview = $target->overview ?? [];
     $wafBlocked = ! empty($overview['waf_blocked']);
@@ -17,12 +19,19 @@
         'TLS' => $tls === null ? '-' : implode(' · ', array_filter([
             $tls['protocol'] ?? null,
             $tls['issuer'] ?? null,
-            'berlaku hingga '.($tls['valid_to'] ?? '-').(isset($tls['days_left']) ? " ({$tls['days_left']} hari)" : ''),
+            'berlaku hingga '.($tls['valid_to'] ?? '-').match (true) {
+                ! isset($tls['days_left']) => '',
+                $tls['days_left'] < 0 => ' (kedaluwarsa '.abs($tls['days_left']).' hari lalu)',
+                default => " (sisa {$tls['days_left']} hari)",
+            },
         ])),
         'Protokol TLS Didukung' => implode(', ', $overview['tls_protocols'] ?? []) ?: '-',
         'Port Terbuka' => implode(', ', array_map(fn ($p) => $p['port'].(! empty($p['service']) ? '/'.$p['service'] : ''), $overview['open_ports'] ?? [])) ?: '-',
+        // Tanggal selesai ditulis jika berbeda hari, contoh pemeriksaan yang melewati tengah malam
         'Waktu Pemeriksaan' => $target->started_at
-            ? $target->started_at->format('d-m-Y H:i:s').($target->finished_at ? ' s.d. '.$target->finished_at->format('H:i:s') : '')
+            ? $target->started_at->format('d-m-Y H:i:s').($target->finished_at
+                ? ' s.d. '.$target->finished_at->format($target->finished_at->isSameDay($target->started_at) ? 'H:i:s' : 'd-m-Y H:i:s')
+                : '')
             : '-',
     ];
 @endphp
@@ -34,20 +43,20 @@
     </p>
 @endif
 
-<dl class="grid grid-cols-1 gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
+<dl class="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
     @foreach ($rows as $label => $value)
-        <div>
-            <dt class="text-slate-500">{{ $label }}</dt>
-            <dd class="font-medium break-all">{{ $value }}</dd>
+        <div class="rounded-xl bg-slate-50 px-4 py-3">
+            <dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">{{ $label }}</dt>
+            <dd class="mt-1 font-medium wrap-break-word text-slate-900">{{ $value }}</dd>
         </div>
     @endforeach
 </dl>
 
-<h2 class="mt-8 text-sm font-semibold text-slate-900">Technology</h2>
+<h2 class="mt-8 text-sm font-semibold text-slate-900">Teknologi</h2>
 @if (! empty($overview['technologies']))
-    <div class="mt-2 flex flex-wrap gap-2">
+    <div class="mt-3 flex flex-wrap gap-2">
         @foreach ($overview['technologies'] as $technology)
-            <span class="rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-700" title="{{ $technology['category'] }} ({{ $technology['source'] }})">
+            <span class="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 shadow-sm" title="{{ $technology['category'] }} ({{ SourceLabel::of($technology['source']) }})">
                 {{ $technology['name'] }}@if ($technology['version']) {{ $technology['version'] }}@endif
             </span>
         @endforeach

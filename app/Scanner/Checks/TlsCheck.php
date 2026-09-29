@@ -37,10 +37,10 @@ class TlsCheck implements Check
     public function run(ScanContext $context): void
     {
         if (! $context->httpsAvailable) {
-            $unavailable = in_array($context->httpsFailure?->kind, [HttpFailure::REFUSED, HttpFailure::TLS], true);
+            $unavailable = $context->httpsRefused();
             $this->all($context, $unavailable ? ObservationStatus::NotApplicable : ObservationStatus::Error, $unavailable
                 ? 'HTTPS tidak tersedia pada website ini.'
-                : 'HTTPS tidak dapat diakses: '.($context->httpsFailure?->kindLabel() ?? 'kesalahan').'.');
+                : 'HTTPS tidak dapat diakses: '.$context->httpsFailureLabel().'.');
 
             return;
         }

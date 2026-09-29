@@ -112,11 +112,11 @@ class ExposureCheck implements Check
 
         foreach (self::listingPaths($context) as $path) {
             // Halaman utama sudah diambil, tidak perlu diminta ulang
-            $response = $path === '/' && $context->homepage?->stoppedReason === null
+            $response = $path === '/' && $context->homepage?->isRedirectStopped() === false
                 ? $context->homepage
                 : $this->request($context, $origin.$path);
 
-            if ($response === false || $response === null) {
+            if ($response === false) {
                 $errors++;
                 $checked[] = ['path' => $path, 'result' => 'error'];
 

@@ -55,6 +55,71 @@ class ScanContext
         return $this->mode === ScanMode::Quick;
     }
 
+    /**
+     * HTTPS terbukti tidak tersedia: port 443 menolak koneksi atau handshake TLS gagal. Timeout atau
+     * kesalahan lain belum membuktikan HTTPS tidak ada, sehingga dicatat ERROR (bagian 22.2), bukan N/A.
+     */
+    public function httpsRefused(): bool
+    {
+        return ! $this->httpsAvailable && in_array($this->httpsFailure?->kind, [HttpFailure::REFUSED, HttpFailure::TLS], true);
+    }
+
+    /**
+     * Status dan alasan untuk pemeriksaan yang membutuhkan respons HTTPS, saat respons itu tidak ada.
+     *
+     * @return array{0: ObservationStatus, 1: string}
+     */
+    public function httpsMissingStatus(string $subject): array
+    {
+        return $this->httpsRefused()
+            ? [ObservationStatus::NotApplicable, "HTTPS tidak tersedia pada website ini, {$subject} hanya berlaku pada HTTPS."]
+            : [ObservationStatus::Error, "Respons HTTPS tidak didapat ({$this->httpsFailureLabel()}), {$subject} tidak dapat diperiksa."];
+    }
+
+    public function httpsFailureLabel(): string
+    {
+        return $this->httpsFailure?->kindLabel() ?? 'kesalahan';
+    }
+
+    /**
+     * Kunci yang tidak dapat dinilai tool eksternal yang memindai $url (bagian 22.4, 22.10, 22.11, dan 23.1):
+     * - kunci HTTPS jika URL yang dipindai bukan https://;
+     * - kunci halaman jika respons berupa halaman blokir WAF atau redirect yang tidak diikuti;
+     * - kunci exposure jika WAF memblokir SIPRIKA, karena path lain juga terblokir.
+     * Hasil untuk dua kelompok pertama dibuang karena dibaca dari respons yang salah. Temuan exposure
+     * tetap disimpan karena cocok berdasarkan isi file.
+     *
+     * @return array{0: list<string>, 1: list<string>} kunci yang tidak dinilai, dan kunci yang hasilnya dibuang
+     */
+    public function toolLimits(string $url): array
+    {
+        $discarded = str_starts_with($url, 'https://') ? [] : config('siprika_scanner.https_keys', []);
+
+        if ($this->wafBlocked || $this->homepage?->isRedirectStopped()) {
+            $discarded = [...$discarded, ...config('siprika_scanner.page_keys', [])];
+        }
+
+        $unassessable = $this->wafBlocked ? [...$discarded, ...config('siprika_scanner.waf_limited_keys', [])] : $discarded;
+
+        return [array_values(array_unique($unassessable)), array_values(array_unique($discarded))];
+    }
+
+    /**
+     * Pemeriksaan bawaan sudah menyatakan PASS untuk kunci katalog ini dengan kriteria bagian 23.1.
+     */
+    public function builtinPassed(string $findingKey): bool
+    {
+        $observationKeys = config("siprika_scanner.catalog_coverage.{$findingKey}", []);
+
+        foreach ($this->observations as $observation) {
+            if ($observation->status === ObservationStatus::Pass && in_array($observation->key, $observationKeys, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public function url(): string
     {
         return $this->target->url;
@@ -118,7 +183,7 @@ class ScanContext
         $merged = [];
 
         foreach ([...($this->overview['technologies'] ?? []), ...$technologies] as $technology) {
-            $key = strtolower($technology['name']);
+            $key = self::technologyKey($technology['name']);
 
             if (! isset($merged[$key]) || ($merged[$key]['version'] === null && $technology['version'] !== null)) {
                 $merged[$key] = $technology;
@@ -129,6 +194,17 @@ class ScanContext
 
         $this->overview['technologies'] = array_values($merged);
         $this->overview['cms'] = $cms === [] ? null : Fingerprint::describe([$cms[0]]);
+    }
+
+    /**
+     * Kunci pembanding nama teknologi dari beberapa scanner, contoh "Font Awesome", "font-awesome",
+     * "PHP Detect", dan "laravel-framework" menjadi "fontawesome", "php", dan "laravel".
+     */
+    public static function technologyKey(string $name): string
+    {
+        $key = preg_replace('/[^a-z0-9]/', '', strtolower($name));
+
+        return preg_replace('/(detect|detection|framework)$/', '', $key) ?: $key;
     }
 
     public function abort(string $message): never
@@ -142,7 +218,7 @@ class ScanContext
      */
     public function reachableUrl(): string
     {
-        return $this->homepage !== null && $this->homepage->stoppedReason === null ? $this->homepage->url : $this->url();
+        return $this->homepage !== null && ! $this->homepage->isRedirectStopped() ? $this->homepage->url : $this->url();
     }
 
     /**

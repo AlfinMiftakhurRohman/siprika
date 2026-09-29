@@ -89,12 +89,15 @@ class HttpCheck implements Check
         $context->overview['final_url'] = $homepage->url;
         $context->overview['http_status'] = $homepage->status;
         $context->overview['redirect_chain'] = $homepage->redirectSummary();
+        $context->overview['redirect_target'] = $homepage->stoppedTarget;
 
         $context->observe('http-status', 'HTTP Status / Redirect', 'internal', ObservationStatus::Info, $summary, [
             'final_url' => $homepage->url,
             'status' => $homepage->status,
             'chain' => $homepage->redirectSummary(),
             'stopped_reason' => $homepage->stoppedReason,
+            // Alamat tujuan redirect yang tidak diikuti, untuk diperiksa sebagai target terpisah (bagian 22.11)
+            'stopped_target' => $homepage->stoppedTarget,
             'waf_blocked' => $context->wafBlocked,
         ]);
     }

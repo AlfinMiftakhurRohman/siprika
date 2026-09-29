@@ -52,6 +52,9 @@ return [
         // (di Windows, PHP memakai certificate store Windows).
         'ca_bundle' => env('SCAN_CA_BUNDLE'),
 
+        // Website dengan sertifikat valid yang diketahui, untuk menguji verifikasi TLS sebelum dipakai (bagian 22.5)
+        'tls_selftest_host' => env('SCAN_TLS_SELFTEST_HOST', 'www.google.com'),
+
         // Port web yang dicek pada pemeriksaan Port/Web Service
         'web_ports' => [80, 443, 8080, 8443, 8000, 8888],
         'port_timeout' => 3,
@@ -64,13 +67,13 @@ return [
             'security-headers' => 1,
             'cookie-security' => 1,
             'technology' => 1,
-            'tls' => 15,
-            'exposure' => ['quick' => 10, 'standard' => 25],
+            'tls' => 5,
+            'exposure' => ['quick' => 5, 'standard' => 15],
             'ports' => 15,
-            'nuclei' => ['quick' => 200, 'standard' => 1300],
+            'nuclei' => ['quick' => 85, 'standard' => 445],
             'testssl' => 80,
             'whatweb' => 10,
-            'zap-passive' => 1,
+            'zap-passive' => 15,
             'ai-analysis' => 60,
             'risk-assessment' => 1,
         ],
@@ -90,9 +93,25 @@ return [
     'tools' => [
         'nuclei' => [
             'command' => env('NUCLEI_PATH'),
-            // Batas waktu Nuclei per website (detik). Profil Standar penuh sekitar 7.000 request pada 5 request per detik.
+            // Batas waktu Nuclei per website (detik). Profil Standar penuh sekitar 7.000 request pada 15 request per detik.
             'timeout' => (int) env('NUCLEI_TIMEOUT', 1800),
-            'rate_limit' => 5,
+            // Maksimal request per detik per website (blueprint bagian 26). Template yang berjalan bersamaan (-c)
+            // disamakan supaya batas ini benar-benar tercapai walaupun respons website agak lambat.
+            'rate_limit' => (int) env('NUCLEI_RATE_LIMIT', 15),
+            /*
+             * Website yang kewalahan atau membatasi request. Request HTTP ke website yang gagal (timeout, koneksi ditolak
+             * atau diputus) dicatat Nuclei di -elog, lalu template-nya diulang pada retry_rate_limit. Jika halaman utama
+             * berubah menjadi 429/5xx/halaman blokir WAF, seluruh run diulang setelah jeda retry_cooldown detik pada
+             * blocked_rate_limit, dan run berikutnya tetap pada kecepatan itu. Nuclei berhenti memeriksa website setelah
+             * max_host_errors (-mhe). Jika setelah diulang masih ada max_failed_requests request gagal atau website masih
+             * memblokir, Nuclei dicatat ERROR (website PARTIAL). Uji e-sakip pada 15 request/detik: 0 sampai 11 dari
+             * sekitar 7.000 request timeout secara acak, semuanya berhasil saat diulang.
+             */
+            'retry_rate_limit' => (int) env('NUCLEI_RETRY_RATE_LIMIT', 10),
+            'blocked_rate_limit' => (int) env('NUCLEI_BLOCKED_RATE_LIMIT', 5),
+            'retry_cooldown' => 30,
+            'max_host_errors' => 30,
+            'max_failed_requests' => 10,
             /*
              * Profil template per mode (bagian 26). Satu profil berisi satu atau beberapa run karena
              * filter Nuclei (tags, severity, id) digabung dengan AND. Setiap run: tags, severity, ids.
@@ -111,6 +130,15 @@ return [
                     ['tags' => ['exposure', 'misconfig', 'tech', 'ssl', 'cve']],
                 ],
             ],
+            /*
+             * Kunci katalog yang dicakup template setiap profil (bagian 22.10), dicek dari template yang terpasang.
+             * Template cookie berseverity info sehingga hanya ada di profil Standar. Tidak ada template directory
+             * listing di kedua profil (template directory-listing bertag fuzz dan dikecualikan).
+             */
+            'profile_keys' => [
+                'quick' => ['missing-hsts', 'missing-csp', 'missing-x-frame-options', 'missing-x-content-type-options', 'missing-referrer-policy', 'tls-cert-invalid', 'tls-chain-incomplete', 'tls-legacy-protocol', 'tls-weak-cipher', 'exposed-sensitive-file'],
+                'standard' => ['missing-hsts', 'missing-csp', 'missing-x-frame-options', 'missing-x-content-type-options', 'missing-referrer-policy', 'insecure-cookie', 'tls-cert-invalid', 'tls-chain-incomplete', 'tls-legacy-protocol', 'tls-weak-cipher', 'exposed-sensitive-file'],
+            ],
             'exclude_tags' => ['intrusive', 'dos', 'fuzz', 'default-login', 'bruteforce', 'brute-force', 'auth-bypass', 'sqli', 'rce', 'xss', 'lfi', 'file-upload', 'oast'],
         ],
         'testssl' => [
@@ -124,6 +152,15 @@ return [
         'nmap' => [
             'command' => env('NMAP_PATH'),
             'timeout' => (int) env('NMAP_TIMEOUT', 300),
+        ],
+        // OWASP ZAP daemon untuk passive scan Mode Standar (bagian 4). Kosong berarti NOT ASSESSED.
+        'zap' => [
+            'url' => env('ZAP_URL'),
+            'api_key' => env('ZAP_API_KEY'),
+            // Batas waktu passive scan satu website (detik)
+            'timeout' => (int) env('ZAP_TIMEOUT', 120),
+            // Perintah ZAP daemon yang ikut dijalankan oleh "php artisan siprika:serve" (opsional)
+            'server_command' => env('ZAP_SERVER_COMMAND'),
         ],
     ],
 
@@ -155,6 +192,17 @@ return [
         // Jumlah baris data bawaan template (baris 7 sampai 11)
         'template_rows' => 5,
         'risk_no_prefix' => 'PL-',
+
+        // Rumus persentase di sheet Ringkasan untuk setiap baris aset ({row} = nomor baris). Template aslinya
+        // keliru membagi dengan jumlah Unacceptable (E10 benar, E11 sampai E14 = C/D) dan tanpa pengaman
+        // pembagian nol. Baris yang merujuk ke sheet lain dari labelnya juga diarahkan ke sheet sesuai label.
+        'summary_sheet' => 'Ringkasan',
+        'summary_formulas' => [
+            // % Acceptable of Inherent Risk = Acceptable inherent / jumlah risiko
+            'E' => 'IFERROR(C{row}/B{row},0)',
+            // % Acceptable of Residual Risk = Acceptable residual / jumlah risiko
+            'H' => 'IFERROR(F{row}/B{row},0)',
+        ],
     ],
 
 ];

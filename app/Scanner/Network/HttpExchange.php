@@ -10,6 +10,8 @@ class HttpExchange
     /**
      * @param  array<string, list<string>>  $headers  nama header huruf kecil
      * @param  list<HttpExchange>  $chain  respons sebelum respons ini (redirect)
+     * @param  string|null  $stoppedReason  alasan redirect terakhir tidak diikuti
+     * @param  string|null  $stoppedTarget  alamat tujuan redirect yang tidak diikuti
      */
     public function __construct(
         public readonly string $url,
@@ -18,7 +20,24 @@ class HttpExchange
         public readonly string $body,
         public readonly array $chain = [],
         public readonly ?string $stoppedReason = null,
+        public readonly ?string $stoppedTarget = null,
     ) {}
+
+    /**
+     * Redirect terakhir tidak diikuti, sehingga respons ini adalah respons redirect, bukan halaman website.
+     */
+    public function isRedirectStopped(): bool
+    {
+        return $this->stoppedReason !== null;
+    }
+
+    /**
+     * Keterangan NOT ASSESSED untuk pemeriksaan halaman saat redirect tidak diikuti (bagian 22.11).
+     */
+    public function stoppedRedirectNote(): string
+    {
+        return "Redirect {$this->url} ke ".($this->stoppedTarget ?? 'host lain').' tidak diikuti, respons redirect bukan halaman website.';
+    }
 
     public function header(string $name): ?string
     {

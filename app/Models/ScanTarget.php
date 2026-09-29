@@ -87,11 +87,30 @@ class ScanTarget extends Model
     }
 
     /**
-     * Label tahap yang sedang berjalan, contoh "Nuclei", atau null jika tidak ada.
+     * Lama pemeriksaan dalam detik: sampai selesai, atau sampai sekarang jika masih berjalan. Null jika belum mulai.
+     */
+    public function elapsedSeconds(): ?int
+    {
+        return $this->started_at === null ? null : (int) max(0, $this->started_at->diffInSeconds($this->finished_at ?? now()));
+    }
+
+    /**
+     * Perkiraan sisa detik dari perkiraan lama setiap tahap, hanya untuk website yang sedang diperiksa.
+     */
+    public function remainingSeconds(): ?int
+    {
+        return $this->status === ScanTargetStatus::Running ? ScanProgress::remainingSeconds($this->progress ?? [], now()->getTimestampMs() / 1000) : null;
+    }
+
+    /**
+     * Label tahap yang sedang berjalan, contoh "Nuclei" atau "Nuclei + testssl.sh" saat Nuclei berjalan
+     * di latar belakang, null jika tidak ada.
      */
     public function currentStep(): ?string
     {
-        return collect($this->progress ?? [])->firstWhere('status', ScanProgress::RUNNING)['label'] ?? null;
+        $running = collect($this->progress ?? [])->where('status', ScanProgress::RUNNING)->pluck('label');
+
+        return $running->isEmpty() ? null : $running->implode(' + ');
     }
 
     /**

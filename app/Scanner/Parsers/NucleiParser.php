@@ -6,6 +6,7 @@ use App\Enums\Severity;
 use App\Scanner\CookieRules;
 use App\Scanner\Data\FindingData;
 use App\Scanner\Evidence;
+use Illuminate\Support\Str;
 
 /**
  * Mengubah output JSONL Nuclei menjadi finding, teknologi, dan daftar hasil untuk Coverage.
@@ -13,6 +14,44 @@ use App\Scanner\Evidence;
  */
 class NucleiParser
 {
+    /** Template cookie yang dinilai dengan aturan insecure-cookie */
+    public const COOKIE_TEMPLATES = ['cookies-without-secure', 'cookies-without-httponly'];
+
+    /**
+     * Kunci katalog yang dapat dihasilkan daftar template, contoh dari "nuclei -tl". Template exposure
+     * dikenali dari foldernya (http/exposures), sama seperti tag exposure pada peta exposure.
+     *
+     * @param  list<string>  $paths  path template relatif, contoh ssl/weak-cipher-suites.yaml
+     * @return list<string>
+     */
+    public static function keysForTemplates(array $paths): array
+    {
+        $byTemplate = [];
+
+        foreach (config('siprika_scanner.nuclei_map', []) as $id => $key) {
+            if ($key !== null) {
+                $byTemplate[explode(':', $id)[0]][] = $key;
+            }
+        }
+
+        foreach (self::COOKIE_TEMPLATES as $id) {
+            $byTemplate[$id][] = 'insecure-cookie';
+        }
+
+        $keys = [];
+
+        foreach ($paths as $path) {
+            $path = str_replace('\\', '/', trim($path));
+            array_push($keys, ...($byTemplate[basename($path, '.yaml')] ?? []));
+
+            if (str_contains($path, '/exposures/')) {
+                $keys[] = 'exposed-sensitive-file';
+            }
+        }
+
+        return array_values(array_unique($keys));
+    }
+
     /**
      * @return array{findings: list<FindingData>, technologies: list<array{name: string, category: string, version: string|null, source: string}>, results: list<array<string, mixed>>}
      */
@@ -31,7 +70,7 @@ class NucleiParser
             $parsed['results'][] = ['template' => $result['full_id'], 'severity' => $result['severity']->value, 'matched_at' => $result['matched_at'], 'name' => $result['name']];
 
             if (self::isTechnology($result)) {
-                $parsed['technologies'][] = ['name' => $result['matcher'] ?? $result['name'], 'category' => 'Teknologi (Nuclei)', 'version' => null, 'source' => 'nuclei'];
+                $parsed['technologies'][] = ['name' => self::technologyName($result), 'category' => 'Teknologi (Nuclei)', 'version' => null, 'source' => 'nuclei'];
 
                 continue;
             }
@@ -87,7 +126,21 @@ class NucleiParser
     {
         return in_array('tech', $result['tags'], true)
             && $result['severity'] === Severity::Info
-            && self::mapEntry($result) === null;
+            && self::mapEntry($result) === null
+            && ! in_array($result['template_id'], config('siprika_scanner.nuclei_not_technology', []), true);
+    }
+
+    /**
+     * Nama teknologi dari matcher (contoh "font-awesome" menjadi "Font Awesome"), atau nama template.
+     *
+     * @param  array<string, mixed>  $result
+     */
+    private static function technologyName(array $result): string
+    {
+        $name = $result['matcher'] ?? $result['name'];
+
+        // Slug huruf kecil dari matcher dibuat mudah dibaca; nama dengan huruf besar dibiarkan
+        return $name === strtolower($name) ? ucwords(str_replace(['-', '_'], ' ', $name)) : $name;
     }
 
     /**
@@ -98,6 +151,7 @@ class NucleiParser
         $detail = "template Nuclei {$result['full_id']} cocok pada {$result['matched_at']}";
         $raw = ['template' => $result['full_id'], 'name' => $result['name'], 'severity' => $result['severity']->value, 'matched_at' => $result['matched_at'], 'extracted' => $result['extracted']];
 
+        // Cookie yang melanggar aturan insecure-cookie menjadi temuan katalog; sisanya tetap informasi (bagian 24.4)
         $cookie = self::cookieFinding($result, $raw);
 
         if ($cookie !== null) {
@@ -117,6 +171,14 @@ class NucleiParser
             return null;
         }
 
+        if ($key === 'tls-weak-cipher') {
+            if (! self::hasWeakCipher($result['extracted'])) {
+                return null;
+            }
+
+            $detail .= $result['extracted'] !== [] ? ' ('.trim(implode(', ', $result['extracted']), '[]').')' : '';
+        }
+
         if ($key === 'exposed-sensitive-file') {
             $raw['snippet'] = Evidence::snippet(implode(' ', $result['extracted']), 'env');
         }
@@ -124,6 +186,32 @@ class NucleiParser
         return $key !== null
             ? new FindingData($key, 'nuclei', $detail, $result['matched_at'], $raw)
             : self::uncatalogued($result, $detail, $raw);
+    }
+
+    /**
+     * Bukti Nuclei yang tersimpan masih sesuai aturan saat ini. Dipakai siprika:recalculate supaya aturan baru
+     * (contoh cipher lemah) juga berlaku untuk hasil pemeriksaan lama tanpa memindai ulang.
+     *
+     * @param  array<string, mixed>  $raw  raw bukti yang disimpan finding()
+     */
+    public static function acceptsStoredEvidence(string $key, array $raw): bool
+    {
+        return $key !== 'tls-weak-cipher' || self::hasWeakCipher(array_values(array_map('strval', (array) ($raw['extracted'] ?? []))));
+    }
+
+    /**
+     * Cipher hasil Nuclei (contoh "[tls10 TLS_RSA_WITH_3DES_EDE_CBC_SHA]") termasuk kategori lemah katalog.
+     * Tanpa nama cipher hasil tetap dianggap lemah supaya cipher lemah tidak terlewat.
+     *
+     * @param  list<string>  $extracted
+     */
+    private static function hasWeakCipher(array $extracted): bool
+    {
+        if ($extracted === []) {
+            return true;
+        }
+
+        return Str::contains(implode(' ', $extracted), config('siprika_scanner.nuclei_weak_cipher_patterns', []));
     }
 
     /**
@@ -152,7 +240,8 @@ class NucleiParser
      */
     private static function exposureKey(array $result): ?string
     {
-        $exposure = $result['severity'] !== Severity::Info
+        $minimum = Severity::fromLoose((string) config('siprika_scanner.nuclei_exposure_min_severity', 'medium'));
+        $exposure = $result['severity']->rank() >= max(1, $minimum->rank())
             && array_intersect($result['tags'], config('siprika_scanner.nuclei_exposure_tags', [])) !== [];
 
         return $exposure ? 'exposed-sensitive-file' : null;

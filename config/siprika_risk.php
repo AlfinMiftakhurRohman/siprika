@@ -48,8 +48,28 @@ return [
     // IR sama dengan atau di atas nilai ini berstatus Not Acceptable (rumus template)
     'not_acceptable_threshold' => 11,
 
-    'treatment_option' => 'Mitigasi Risiko',
+    /*
+    | Isi kolom tetap sheet Perangkat Lunak (bagian 25)
+    */
     'risk_type' => 'Negatif',
+    // Kolom I: kontrol internal tidak terlihat dari pemeriksaan eksternal
+    'current_control' => 'Belum teridentifikasi dari pemeriksaan eksternal',
+    // Kolom N dan P: semua baris, karena setiap finding memiliki Rencana Aksi (contoh DI-001 pada template)
+    'treatment_decision' => 'Ya',
+    'treatment_option' => 'Mitigasi Risiko',
+
+    /*
+    | Residual Risk (bagian 24.6): perkiraan risiko setelah Rencana Aksi dijalankan, bukan hasil pengukuran.
+    | Rencana Aksi menurunkan kemungkinan, dampak jika tetap terjadi tidak berubah.
+    */
+    'residual' => [
+        // Kolom U: risiko tidak pernah benar-benar nol
+        'exists' => 'Ya',
+        // Kolom V: null berarti sama dengan Dampak inherent
+        'impact' => null,
+        // Kolom W: 1 = Hampir Tidak Terjadi
+        'likelihood' => 1,
+    ],
 
     /*
     | Finding Nuclei di luar katalog (bagian 24.4)

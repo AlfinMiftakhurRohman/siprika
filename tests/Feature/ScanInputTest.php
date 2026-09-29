@@ -170,6 +170,8 @@ class ScanInputTest extends TestCase
             'localhost tanpa skema' => ['localhost:8000', 'localhost tidak diizinkan'],
             'ip tanpa skema' => ['192.168.1.10', 'alamat IP tidak diizinkan'],
             'nama tanpa titik' => ['intranet', 'nama domain lengkap'],
+            'port nol' => ['https://web.jemberkab.go.id:0', 'nomor port tidak valid'],
+            'port kosong' => ['web.jemberkab.go.id:', 'format URL tidak valid'],
             'terlalu panjang setelah ditambah https' => ['a.jemberkab.go.id/'.str_repeat('x', 2030), 'URL terlalu panjang'],
             'subdomain localhost' => ['http://app.localhost', 'localhost tidak diizinkan'],
             'ip privat' => ['http://192.168.1.10', 'alamat IP tidak diizinkan'],

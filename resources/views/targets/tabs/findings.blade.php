@@ -1,49 +1,38 @@
-@forelse ($target->findings->sortByDesc(fn ($finding) => $finding->severity->rank()) as $finding)
-    <article class="border-b border-slate-100 py-4 first:pt-0 last:border-0">
-        <div class="flex flex-wrap items-center gap-2">
-            <x-badge :class="$finding->severity->badgeClass()">{{ $finding->severity->label() }}</x-badge>
-            <h3 class="font-semibold text-slate-900">{{ $finding->title }}</h3>
-            <code class="text-xs text-slate-400">{{ $finding->finding_key }}</code>
-        </div>
+@use('App\Scanner\CatalogCoverage')
 
-        @if ($finding->description)
-            <p class="mt-2 text-sm text-slate-700">{{ $finding->description }}</p>
-        @endif
+@php
+    $unassessed = CatalogCoverage::unassessedCount($catalogCoverage);
+    // Hasil Nuclei berseverity info di luar katalog dikelompokkan terpisah supaya kerawanan tidak tenggelam
+    [$informational, $findings] = $target->findings
+        ->sortByDesc(fn ($finding) => $finding->severity->rank())
+        ->partition(fn ($finding) => $finding->isInformational());
+@endphp
 
-        <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-sm sm:grid-cols-3">
-            <div><dt class="inline text-slate-500">Scanner:</dt> <dd class="inline">{{ implode(', ', $finding->sources) }}</dd></div>
-            @if ($finding->cve)
-                <div><dt class="inline text-slate-500">CVE:</dt> <dd class="inline">{{ $finding->cve }}</dd></div>
-            @endif
-            @if ($finding->cvss)
-                <div><dt class="inline text-slate-500">CVSS:</dt> <dd class="inline">{{ $finding->cvss }}</dd></div>
-            @endif
-        </dl>
+@if ($unassessed > 0)
+    {{-- Bagian 22.10: halaman hasil tidak boleh menyiratkan website aman untuk kunci yang tidak diperiksa --}}
+    <p class="mb-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        {{ $unassessed }} dari {{ count($catalogCoverage) }} jenis temuan tidak diperiksa atau pemeriksaannya gagal (NOT ASSESSED/ERROR), sehingga tidak dapat dinyatakan aman.
+        Lihat tab <a href="{{ route('targets.show', ['scanTarget' => $target, 'tab' => 'coverage']) }}" class="underline">Coverage</a>.
+    </p>
+@endif
 
-        @if ($finding->recommendation)
-            <p class="mt-2 text-sm"><span class="text-slate-500">Rekomendasi:</span> {{ $finding->recommendation }}</p>
-        @endif
-
-        <div class="mt-3 rounded-md bg-slate-50 p-3">
-            <p class="text-xs font-semibold text-slate-600">Evidence</p>
-            <ul class="mt-1 space-y-1 text-xs text-slate-700">
-                @foreach ($finding->evidences as $evidence)
-                    <li class="break-all">
-                        <span class="font-medium">[{{ $evidence->source }}]</span>
-                        {{ $evidence->detail }}
-                        @if ($evidence->endpoint)
-                            <span class="text-slate-500">&middot; {{ $evidence->endpoint }}</span>
-                        @endif
-                        @if (! empty($evidence->raw['snippet']))
-                            <code class="mt-1 block rounded bg-white px-2 py-1 text-slate-600">{{ $evidence->raw['snippet'] }}</code>
-                        @endif
-                    </li>
-                @endforeach
-            </ul>
-        </div>
-    </article>
+@forelse ($findings as $finding)
+    @include('targets.partials.finding')
 @empty
     <p class="text-sm text-slate-500">
         {{ $target->status->isFinished() ? 'Tidak ada finding. Tidak ditemukannya kerawanan tidak berarti website sepenuhnya aman.' : 'Finding akan muncul setelah pemeriksaan selesai.' }}
     </p>
 @endforelse
+
+@if ($informational->isNotEmpty())
+    <details class="mt-6 rounded-md border border-slate-200">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">
+            Informasi dari scanner ({{ $informational->count() }}), tidak masuk Risk Register
+        </summary>
+        <div class="border-t border-slate-100 px-4 pt-4">
+            @foreach ($informational as $finding)
+                @include('targets.partials.finding')
+            @endforeach
+        </div>
+    </details>
+@endif

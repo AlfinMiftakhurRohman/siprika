@@ -3,6 +3,7 @@
     kolom A sampai AA). Isi kolom sama dengan export Excel (App\Risk\RiskRegisterSheet).
     Variabel: $items (koleksi RiskRegisterItem, urut sesuai nomor risiko).
 --}}
+@use('App\Models\RiskRegisterItem')
 @use('App\Risk\RiskRegisterSheet')
 
 @php
@@ -14,13 +15,7 @@
     ];
     $center = ['A', 'B', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'U', 'V', 'W', 'X', 'Y'];
     $aiColumns = ['G', 'Q', 'Z'];
-    $levelClasses = [
-        'Sangat Tinggi' => 'bg-red-200',
-        'Tinggi' => 'bg-orange-200',
-        'Sedang' => 'bg-yellow-100',
-        'Rendah' => 'bg-emerald-100',
-        'Sangat Rendah' => 'bg-sky-50',
-    ];
+    $levelClasses = array_map(fn (array $level) => $level['cell'], RiskRegisterItem::LEVELS);
     $blue = 'bg-[#2F75B5] text-white';
     $red = 'bg-[#C00000] text-white';
     $green = 'bg-[#00B050] text-white';
@@ -90,7 +85,7 @@
                             <td @class([
                                 'border border-slate-400 px-1.5 py-1 align-top whitespace-pre-line break-words',
                                 'text-center' => in_array($column, $center, true),
-                                'font-semibold' => in_array($column, ['L', 'M'], true),
+                                'font-semibold' => in_array($column, ['L', 'M', 'X', 'Y'], true),
                                 $levelClasses[$item->risk_level] ?? '' => in_array($column, ['L', 'M'], true),
                             ])
                                 @if (in_array($column, $aiColumns, true)) title="Teks: {{ $item->textSourceLabel() }}" @endif
@@ -103,7 +98,8 @@
         </table>
     </div>
     <p class="mt-2 text-xs text-slate-500">
-        Kolom Kontrol Saat Ini, Target/Jadwal, Penanggung Jawab, Residual Risk, dan Risk Owner sengaja kosong untuk diisi user (bagian 17).
+        Kolom Target/Jadwal, Penanggung Jawab, dan Risk Owner sengaja kosong untuk diisi staf (bagian 17).
+        Residual Risk adalah perkiraan risiko setelah Rencana Aksi dijalankan, bukan hasil pengukuran (bagian 24.6).
         Arahkan kursor ke kolom Dampak, Rencana Aksi, atau Rencana Kontrol Tambahan untuk melihat asal teksnya (AI atau katalog).
     </p>
 @endif

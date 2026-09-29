@@ -65,7 +65,9 @@ class RiskRegisterExporter
 
         try {
             $workbook = (string) $zip->getFromName('xl/workbook.xml');
-            [$sheetIndex, $sheetPath] = $this->locateSheet($zip, $workbook);
+            [$sheetIndex, $sheetPath] = $this->findSheet($zip, $workbook, $this->sheetName)
+                ?? throw new RuntimeException("Sheet {$this->sheetName} tidak ada di template.");
+            $summaryPath = $this->findSheet($zip, $workbook, (string) config('siprika.excel.summary_sheet'))[1] ?? null;
 
             // Baris data minimal sebanyak baris bawaan template supaya tetap bisa diisi manual
             $rowCount = max($items->count(), $this->templateTotalRow - $this->firstRow);
@@ -73,7 +75,7 @@ class RiskRegisterExporter
             $totalRow = $lastRow + 1;
 
             $zip->addFromString($sheetPath, $this->rewriteSheet((string) $zip->getFromName($sheetPath), $items->values(), $lastRow, $totalRow));
-            $this->updateOtherSheets($zip, $sheetPath, $lastRow, $totalRow);
+            $this->updateOtherSheets($zip, $sheetPath, $summaryPath, $lastRow, $totalRow);
             $zip->addFromString('xl/workbook.xml', $this->updateWorkbook($workbook, $sheetIndex, $lastRow));
             $this->removeCalcChain($zip);
         } finally {
@@ -99,9 +101,9 @@ class RiskRegisterExporter
     }
 
     /**
-     * @return array{0: int, 1: string} indeks sheet (0-based) dan path XML-nya di dalam zip
+     * @return array{0: int, 1: string}|null indeks sheet (0-based) dan path XML-nya di dalam zip
      */
-    private function locateSheet(ZipArchive $zip, string $workbook): array
+    private function findSheet(ZipArchive $zip, string $workbook, string $sheetName): ?array
     {
         $document = $this->load($workbook);
         $xpath = new DOMXPath($document);
@@ -112,14 +114,14 @@ class RiskRegisterExporter
 
         foreach ($xpath->query('//m:sheets/m:sheet') as $position => $sheet) {
             /** @var DOMElement $sheet */
-            if ($sheet->getAttribute('name') === $this->sheetName) {
+            if ($sheet->getAttribute('name') === $sheetName) {
                 $relationId = $sheet->getAttributeNS(self::REL_NS, 'id');
                 $index = $position;
             }
         }
 
         if ($relationId === null) {
-            throw new RuntimeException("Sheet {$this->sheetName} tidak ada di template.");
+            return null;
         }
 
         $relations = $this->load((string) $zip->getFromName('xl/_rels/workbook.xml.rels'));
@@ -130,7 +132,7 @@ class RiskRegisterExporter
             }
         }
 
-        throw new RuntimeException("Relasi sheet {$this->sheetName} tidak ditemukan.");
+        throw new RuntimeException("Relasi sheet {$sheetName} tidak ditemukan.");
     }
 
     /**
@@ -331,17 +333,35 @@ class RiskRegisterExporter
      */
     private function mapCellRows(string $formula, callable $map): string
     {
-        // Referensi sel di luar teks dalam tanda kutip ganda; nama range (RiskMatrix) tidak berangka sehingga tidak tersentuh
-        $parts = preg_split('/("[^"]*")/', $formula, -1, PREG_SPLIT_DELIM_CAPTURE);
+        return $this->mapCellReferences($formula, fn (string $columnLock, string $column, string $rowLock, int $row) => $columnLock.$column.$rowLock.$map($row));
+    }
+
+    /**
+     * Geser referensi relatif sejauh kolom dan baris tertentu, sama seperti Excel menyalin rumus.
+     */
+    private function shiftFormula(string $formula, int $columns, int $rows): string
+    {
+        return $this->mapCellReferences($formula, fn (string $columnLock, string $column, string $rowLock, int $row) => $columnLock
+            .($columnLock === '' ? self::columnLetter(self::columnIndex($column) + $columns) : $column)
+            .$rowLock.($rowLock === '' ? $row + $rows : $row));
+    }
+
+    /**
+     * @param  callable(string, string, string, int): string  $map  menerima tanda $ kolom, kolom, tanda $ baris, dan baris
+     */
+    private function mapCellReferences(string $formula, callable $map): string
+    {
+        // Referensi sel di luar teks dalam tanda kutip dan nama sheet; nama range (RiskMatrix) tidak berangka sehingga tidak tersentuh
+        $parts = preg_split('/("[^"]*"|\'[^\']*\')/', $formula, -1, PREG_SPLIT_DELIM_CAPTURE);
 
         foreach ($parts as $index => $part) {
-            if (str_starts_with($part, '"')) {
+            if (str_starts_with($part, '"') || str_starts_with($part, "'")) {
                 continue;
             }
 
             $parts[$index] = preg_replace_callback(
-                '/(?<![A-Za-z0-9_.])(\$?[A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_])/',
-                fn (array $m) => $m[1].$m[2].$map((int) $m[3]),
+                '/(?<![A-Za-z0-9_.])(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(A-Za-z_])/',
+                fn (array $m) => $map($m[1], $m[2], $m[3], (int) $m[4]),
                 $part,
             );
         }
@@ -363,7 +383,7 @@ class RiskRegisterExporter
     /**
      * Rumus di sheet lain (contoh Ringkasan) yang mengacu ke baris total ikut dipindahkan.
      */
-    private function updateOtherSheets(ZipArchive $zip, string $sheetPath, int $lastRow, int $totalRow): void
+    private function updateOtherSheets(ZipArchive $zip, string $sheetPath, ?string $summaryPath, int $lastRow, int $totalRow): void
     {
         $quotedName = preg_quote("'".str_replace("'", "''", $this->sheetName)."'", '/');
 
@@ -390,11 +410,220 @@ class RiskRegisterExporter
                 return $m[1].$formula.$m[3];
             }, $xml);
 
+            if ($name === $summaryPath) {
+                $updated = $this->fixSummaryFormulas($updated, $this->sheetNames($zip), $this->sharedStrings($zip));
+            }
+
             // Nilai tersimpan lama dihitung ulang Excel karena fullCalcOnLoad
             if ($updated !== $xml) {
                 $zip->addFromString($name, $updated);
             }
         }
+    }
+
+    /**
+     * Perbaikan kesalahan template pada baris aset sheet Ringkasan (baris yang mengambil total AI suatu sheet):
+     * - rumus persentase Inherent dan Residual diganti sesuai config siprika.excel.summary_formulas, karena
+     *   rumus bawaan membagi dengan jumlah Unacceptable;
+     * - baris yang merujuk ke sheet lain dari labelnya (baris "SDM & Pihak Ketiga" merujuk 'Sarana Pendukung')
+     *   diarahkan ke sheet sesuai label.
+     *
+     * @param  list<string>  $sheetNames
+     * @param  list<string>  $sharedStrings
+     */
+    private function fixSummaryFormulas(string $xml, array $sheetNames, array $sharedStrings): string
+    {
+        $document = $this->load($xml);
+        $xpath = new DOMXPath($document);
+        $xpath->registerNamespace('m', self::MAIN_NS);
+
+        foreach ($xpath->query('//m:sheetData/m:row') as $row) {
+            /** @var DOMElement $row */
+            $formulas = iterator_to_array($xpath->query('m:c/m:f', $row));
+            $referenced = [];
+
+            foreach ($formulas as $formula) {
+                // Contoh 'Perangkat Lunak'!AI12; tanda kutip di nama sheet ditulis dua kali
+                preg_match_all('/\'((?:[^\']|\'\')+)\'!\$?AI\$?\d/', $formula->textContent, $matches);
+                array_push($referenced, ...array_map(fn (string $name) => str_replace("''", "'", $name), $matches[1]));
+            }
+
+            if ($referenced === []) {
+                continue;
+            }
+
+            $rowNumber = $row->getAttribute('r');
+            $label = $this->cellText($xpath, $row, "A{$rowNumber}", $sharedStrings);
+            $wrongSheets = array_diff(array_unique($referenced), [$label]);
+
+            if (in_array($label, $sheetNames, true) && $wrongSheets !== []) {
+                foreach ($formulas as $formula) {
+                    $text = $formula->textContent;
+
+                    foreach ($wrongSheets as $wrong) {
+                        $text = str_replace(self::quoteSheet($wrong).'!', self::quoteSheet($label).'!', $text);
+                    }
+
+                    $formula->nodeValue = '';
+                    $formula->appendChild($document->createTextNode($text));
+                }
+            }
+
+            foreach (config('siprika.excel.summary_formulas', []) as $column => $template) {
+                $cell = $this->cellInRow($document, $xpath, $row, $column.$rowNumber);
+                $this->unshareFormula($xpath, $cell);
+
+                while ($cell->firstChild !== null) {
+                    $cell->removeChild($cell->firstChild);
+                }
+
+                $cell->removeAttribute('t');
+                $element = $document->createElementNS(self::MAIN_NS, 'f');
+                $element->appendChild($document->createTextNode(str_replace('{row}', $rowNumber, $template)));
+                $cell->appendChild($element);
+            }
+        }
+
+        return $document->saveXML();
+    }
+
+    /**
+     * Nama semua sheet di workbook.
+     *
+     * @return list<string>
+     */
+    private function sheetNames(ZipArchive $zip): array
+    {
+        $document = $this->load((string) $zip->getFromName('xl/workbook.xml'));
+        $names = [];
+
+        foreach ($document->getElementsByTagNameNS(self::MAIN_NS, 'sheet') as $sheet) {
+            $names[] = $sheet->getAttribute('name');
+        }
+
+        return $names;
+    }
+
+    /**
+     * Isi xl/sharedStrings.xml sesuai indeks.
+     *
+     * @return list<string>
+     */
+    private function sharedStrings(ZipArchive $zip): array
+    {
+        $xml = $zip->getFromName('xl/sharedStrings.xml');
+
+        if ($xml === false) {
+            return [];
+        }
+
+        $strings = [];
+
+        foreach ($this->load($xml)->getElementsByTagNameNS(self::MAIN_NS, 'si') as $item) {
+            $text = '';
+
+            foreach ($item->getElementsByTagNameNS(self::MAIN_NS, 't') as $part) {
+                $text .= $part->textContent;
+            }
+
+            $strings[] = $text;
+        }
+
+        return $strings;
+    }
+
+    /**
+     * Teks sel (shared string, inline string, atau nilai), tanpa spasi di awal dan akhir.
+     *
+     * @param  list<string>  $sharedStrings
+     */
+    private function cellText(DOMXPath $xpath, DOMElement $row, string $reference, array $sharedStrings): string
+    {
+        $cell = $xpath->query("m:c[@r='{$reference}']", $row)->item(0);
+
+        if (! $cell instanceof DOMElement) {
+            return '';
+        }
+
+        $text = match ($cell->getAttribute('t')) {
+            's' => $sharedStrings[(int) $xpath->query('m:v', $cell)->item(0)?->textContent] ?? '',
+            'inlineStr' => implode('', array_map(fn ($t) => $t->textContent, iterator_to_array($xpath->query('m:is//m:t', $cell)))),
+            default => (string) $xpath->query('m:v', $cell)->item(0)?->textContent,
+        };
+
+        return trim($text);
+    }
+
+    /**
+     * Nama sheet dalam rumus, contoh 'SDM & Pihak Ketiga'.
+     */
+    private static function quoteSheet(string $name): string
+    {
+        return "'".str_replace("'", "''", $name)."'";
+    }
+
+    /**
+     * Rumus shared (satu rumus induk dipakai beberapa sel) dijabarkan menjadi rumus biasa di setiap sel,
+     * supaya satu sel di dalamnya bisa diganti tanpa merusak sel lain yang merujuk ke induknya.
+     */
+    private function unshareFormula(DOMXPath $xpath, DOMElement $cell): void
+    {
+        $formula = $xpath->query('m:f', $cell)->item(0);
+
+        if (! $formula instanceof DOMElement || $formula->getAttribute('t') !== 'shared') {
+            return;
+        }
+
+        $group = "//m:sheetData/m:row/m:c/m:f[@t='shared'][@si='{$formula->getAttribute('si')}']";
+        $master = $xpath->query($group.'[@ref]')->item(0);
+
+        if (! $master instanceof DOMElement) {
+            return;
+        }
+
+        [$masterColumn, $masterRow] = self::splitCell($master->parentNode->getAttribute('r'));
+        $masterFormula = $master->textContent;
+
+        foreach (iterator_to_array($xpath->query($group)) as $member) {
+            /** @var DOMElement $member */
+            [$column, $row] = self::splitCell($member->parentNode->getAttribute('r'));
+
+            while ($member->firstChild !== null) {
+                $member->removeChild($member->firstChild);
+            }
+
+            $member->appendChild($member->ownerDocument->createTextNode(
+                $this->shiftFormula($masterFormula, $column - $masterColumn, $row - $masterRow)));
+
+            foreach (['t', 'si', 'ref'] as $attribute) {
+                $member->removeAttribute($attribute);
+            }
+        }
+    }
+
+    /**
+     * Sel pada baris, dibuat di posisi kolom yang benar jika belum ada.
+     */
+    private function cellInRow(DOMDocument $document, DOMXPath $xpath, DOMElement $row, string $reference): DOMElement
+    {
+        $existing = $xpath->query("m:c[@r='{$reference}']", $row)->item(0);
+
+        if ($existing instanceof DOMElement) {
+            return $existing;
+        }
+
+        $cell = $document->createElementNS(self::MAIN_NS, 'c');
+        $cell->setAttribute('r', $reference);
+        [$column] = self::splitCell($reference);
+
+        foreach ($xpath->query('m:c', $row) as $sibling) {
+            /** @var DOMElement $sibling */
+            if (self::splitCell($sibling->getAttribute('r'))[0] > $column) {
+                return $row->insertBefore($cell, $sibling);
+            }
+        }
+
+        return $row->appendChild($cell);
     }
 
     private function updateWorkbook(string $xml, int $sheetIndex, int $lastRow): string
@@ -445,6 +674,29 @@ class RiskRegisterExporter
         }
 
         return $document;
+    }
+
+    /**
+     * Nomor kolom dan baris dari alamat sel, contoh "AB12" menjadi [28, 12].
+     *
+     * @return array{0: int, 1: int}
+     */
+    private static function splitCell(string $reference): array
+    {
+        preg_match('/^\$?([A-Z]{1,3})\$?(\d+)$/', $reference, $m);
+
+        return [self::columnIndex($m[1]), (int) $m[2]];
+    }
+
+    public static function columnIndex(string $letter): int
+    {
+        $index = 0;
+
+        foreach (str_split($letter) as $char) {
+            $index = $index * 26 + ord($char) - 64;
+        }
+
+        return $index;
     }
 
     public static function columnLetter(int $index): string
