@@ -793,4 +793,24 @@ class ScanPipelineTest extends TestCase
 
         $this->assertSame(11, RiskRegisterItem::count());
     }
+
+    public function test_isi_csp_ditampilkan_dan_csp_tanpa_pembatasan_script_diberi_catatan(): void
+    {
+        $headers = self::secureHeaders();
+        $headers['Content-Security-Policy'] = 'upgrade-insecure-requests';
+        FakeNetwork::http([
+            'https://web.jemberkab.go.id/' => Http::response('<title>Web</title>', 200, $headers),
+            'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => 'https://web.jemberkab.go.id/']),
+        ]);
+
+        $csp = $this->observation($this->scan(), 'header-csp');
+
+        // Sesuai kriteria bagian 23 tetap PASS, tetapi tidak terbaca seolah membatasi script
+        $this->assertSame(ObservationStatus::Pass, $csp->status);
+        $this->assertSame('Content-Security-Policy: upgrade-insecure-requests (tanpa default-src atau script-src, sehingga tidak membatasi sumber script)', $csp->summary);
+
+        $headers['Content-Security-Policy'] = "default-src 'self'; frame-ancestors 'self'";
+        FakeNetwork::http(['https://web.jemberkab.go.id/' => Http::response('<title>Web</title>', 200, $headers), 'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => 'https://web.jemberkab.go.id/'])]);
+        $this->assertSame("Content-Security-Policy: default-src 'self'; frame-ancestors 'self'", $this->observation($this->scan(), 'header-csp')->summary);
+    }
 }

@@ -130,18 +130,21 @@ class RawReportExporter
                 ])),
             ],
 
+            // Keluaran mentah tool; kolom terakhir menjelaskan hasil mana yang menjadi temuan dan mana yang tidak dipakai
             'Nuclei' => [
-                ['Website' => 36, 'Template' => 44, 'Nama' => 44, 'Severity' => 9, 'Lokasi' => 44],
+                ['Website' => 36, 'Template' => 44, 'Nama' => 44, 'Severity' => 9, 'Lokasi' => 44, 'Dipakai sebagai' => 50],
                 $each(fn (ScanTarget $target) => collect($this->toolRaw($target, 'nuclei', 'results'))->map(fn (array $result) => [
                     $target->url, $result['template'] ?? null, $result['name'] ?? null, $result['severity'] ?? null, $result['matched_at'] ?? null,
+                    $this->nucleiUsage($target, $result),
                 ])),
             ],
 
             'OWASP ZAP' => [
-                ['Website' => 36, 'Alert' => 44, 'Risk' => 13, 'URL' => 44, 'Parameter' => 20, 'Evidence' => 40, 'Plugin' => 9],
+                ['Website' => 36, 'Alert' => 44, 'Risk' => 13, 'URL' => 44, 'Parameter' => 20, 'Evidence' => 40, 'Plugin' => 9, 'Dipakai sebagai' => 50],
                 $each(fn (ScanTarget $target) => collect($this->toolRaw($target, 'zap', 'alerts'))->map(fn (array $alert) => [
                     $target->url, $alert['name'] ?? null, $alert['risk'] ?? null, $alert['url'] ?? null,
                     $alert['param'] ?? null, $alert['evidence'] ?? null, $alert['plugin'] ?? null,
+                    $this->zapUsage($target, $alert),
                 ])),
             ],
 
@@ -185,7 +188,11 @@ class RawReportExporter
             match ($overview['https'] ?? null) {
                 true => 'Ya', false => 'Tidak', default => null
             },
-            collect($overview['redirect_chain'] ?? [])->map(fn (array $hop) => ($hop['status'] ?? '?').' '.($hop['url'] ?? ''))->implode(' -> ') ?: null,
+            match (true) {
+                ! isset($overview['redirect_chain']) => null,
+                count($overview['redirect_chain']) < 2 => 'Tidak ada',
+                default => collect($overview['redirect_chain'])->map(fn (array $hop) => ($hop['status'] ?? '?').' '.($hop['url'] ?? ''))->implode(' -> '),
+            },
             $overview['title'] ?? null,
             $overview['web_server'] ?? null,
             $overview['powered_by'] ?? null,
@@ -257,6 +264,75 @@ class RawReportExporter
         }
 
         return $rows;
+    }
+
+    /**
+     * Hasil Nuclei menjadi temuan apa, dicocokkan lewat template yang tersimpan di bukti temuan, atau alasan tidak dipakai.
+     *
+     * @param  array<string, mixed>  $result
+     */
+    private function nucleiUsage(ScanTarget $target, array $result): string
+    {
+        $template = (string) ($result['template'] ?? '');
+        $finding = $this->findingWithEvidence($target, 'nuclei', fn (array $raw) => ($raw['template'] ?? null) === $template);
+
+        if ($finding !== null) {
+            return self::findingUsage($finding);
+        }
+
+        $id = explode(':', $template)[0];
+
+        if (in_array($id, config('siprika_scanner.nuclei_raw_only', []), true)) {
+            return 'Tidak dipakai: template heuristik yang sering keliru (CDN/WAF memakai deteksi bawaan)';
+        }
+
+        $map = config('siprika_scanner.nuclei_map', []);
+        $key = $map[$template] ?? $map[$id] ?? null;
+        $ignored = $this->toolRaw($target, 'nuclei', 'ignored_keys');
+
+        return $key !== null && isset($ignored[$key])
+            ? "Diabaikan untuk {$key}: {$ignored[$key]}"
+            : 'Bukan temuan (deteksi teknologi atau informasi yang tidak dinilai)';
+    }
+
+    /**
+     * Alert ZAP menjadi temuan apa, dicocokkan lewat alert_ref yang tersimpan di bukti temuan, atau alasan tidak dipakai.
+     *
+     * @param  array<string, mixed>  $alert
+     */
+    private function zapUsage(ScanTarget $target, array $alert): string
+    {
+        $reference = (string) ($alert['ref'] ?? $alert['plugin'] ?? '');
+        $finding = $this->findingWithEvidence($target, 'zap', fn (array $raw) => (string) ($raw['alert_ref'] ?? $raw['plugin'] ?? '') === $reference);
+
+        if ($finding !== null) {
+            return self::findingUsage($finding);
+        }
+
+        $map = config('siprika_scanner.zap_map', []);
+        $key = $map[$reference] ?? $map[(string) ($alert['plugin'] ?? '')] ?? null;
+        $ignored = $this->toolRaw($target, 'zap', 'ignored_keys');
+
+        return match (true) {
+            $key !== null && isset($ignored[$key]) => "Diabaikan untuk {$key}: {$ignored[$key]}",
+            $key !== null => "Tidak menjadi temuan {$key} (kriteria SIPRIKA tidak terpenuhi)",
+            default => 'Informasi ZAP di luar katalog SIPRIKA',
+        };
+    }
+
+    /**
+     * @param  callable(array<string, mixed>): bool  $matches
+     */
+    private function findingWithEvidence(ScanTarget $target, string $source, callable $matches): ?ScanFinding
+    {
+        return $target->findings->first(fn (ScanFinding $finding) => $finding->evidences->contains(
+            fn ($evidence) => $evidence->source === $source && $matches((array) $evidence->raw),
+        ));
+    }
+
+    private static function findingUsage(ScanFinding $finding): string
+    {
+        return ($finding->isInformational() ? 'Informasi' : 'Temuan').": {$finding->finding_key}";
     }
 
     /**

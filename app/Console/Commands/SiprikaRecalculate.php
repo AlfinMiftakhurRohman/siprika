@@ -58,7 +58,7 @@ class SiprikaRecalculate extends Command
         }
 
         if ($dropped > 0) {
-            $this->components->twoColumnDetail('Bukti Nuclei dibuang', "{$dropped} bukti tidak sesuai aturan terbaru (contoh cipher TLS biasa bukan cipher lemah)");
+            $this->components->twoColumnDetail('Bukti Nuclei dibuang', "{$dropped} bukti tidak sesuai aturan terbaru (contoh cipher TLS biasa bukan cipher lemah, deteksi WAF/S3 heuristik)");
         }
 
         foreach ($purged as $key => $reason) {

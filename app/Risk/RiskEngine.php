@@ -30,7 +30,7 @@ class RiskEngine
         $findings = $target->findings()->with('evidences')->get();
         // Jika AI tidak aktif, kolom deskriptif memakai teks katalog walaupun ada hasil AI tersimpan (bagian 29)
         $aiAnalyses = config('siprika.ai.enabled')
-            ? AiAnalysis::whereIn('finding_key', $findings->pluck('finding_key'))->get()->keyBy('finding_key')
+            ? AiAnalysis::current()->whereIn('finding_key', $findings->pluck('finding_key'))->get()->keyBy('finding_key')
             : collect();
 
         $rows = [];
@@ -101,7 +101,7 @@ class RiskEngine
             'impact_area' => $nuclei['impact_area'],
             'impact' => $impact,
             'likelihood' => $nuclei['likelihood_default'],
-            'impact_description' => $nuclei['impact_description'],
+            'impact_description' => $nuclei['impact_description_by_severity'][$finding->severity->value] ?? $nuclei['impact_description'],
             'recommendation' => $nuclei['recommendation'],
             'output' => $nuclei['output'],
             'additional_control' => $nuclei['additional_control'],
@@ -185,7 +185,10 @@ class RiskEngine
     private function vulnerabilityText(string $base, ScanFinding $finding): string
     {
         if (str_starts_with($finding->finding_key, 'nuclei:')) {
-            $details = collect([$finding->title.($finding->cve ? " ({$finding->cve})" : '')]);
+            // Judul template ditambah lokasi yang cocok, contoh "Editor Configuration File - Detect di /.editorconfig"
+            $locations = $finding->evidences->pluck('endpoint')->filter()->map(fn (string $endpoint) => self::location($endpoint))->unique()->values();
+            $where = $locations->isEmpty() ? '' : ' di '.$locations->take(3)->implode(', ').($locations->count() > 3 ? ', dan '.($locations->count() - 3).' lokasi lain' : '');
+            $details = collect([$finding->title.($finding->cve ? " ({$finding->cve})" : '').$where]);
         } else {
             // Satu penjelasan per endpoint dari sumber yang paling mudah dibaca: pemeriksaan bawaan, lalu tool lain
             // (testssl.sh, ZAP), lalu Nuclei ("template ... cocok pada ..."). Sumber lain untuk endpoint yang sama
@@ -213,5 +216,19 @@ class RiskEngine
         }
 
         return $base.' ('.mb_strimwidth($text, 0, 400, '...').')';
+    }
+
+    /**
+     * Lokasi singkat dari endpoint: path URL (contoh /.editorconfig), atau endpoint apa adanya jika bukan URL (host:443).
+     */
+    private static function location(string $endpoint): string
+    {
+        $parts = parse_url($endpoint);
+
+        if (! isset($parts['scheme'], $parts['host'])) {
+            return $endpoint;
+        }
+
+        return ($parts['path'] ?? '') === '' ? '/' : $parts['path'].(isset($parts['query']) ? '?'.$parts['query'] : '');
     }
 }

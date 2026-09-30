@@ -85,6 +85,12 @@ return [
         'impact_area' => 'Operasional dan Aset TIK',
         'output' => 'Kerawanan yang dilaporkan scanner telah ditutup dan tidak terdeteksi lagi pada pemeriksaan ulang.',
         'impact_description' => 'Kerawanan pada aplikasi berpotensi dimanfaatkan pihak yang tidak berwenang sehingga mengganggu keamanan dan layanan aplikasi.',
+        // Kalimat dampak sesuai severity, supaya temuan kecil (contoh file .editorconfig terbuka) tidak terdengar berat.
+        // Severity yang tidak ada di sini memakai impact_description.
+        'impact_description_by_severity' => [
+            'low' => 'Informasi atau file yang terdeteksi scanner dapat diakses publik dan membantu pihak lain mengenali aplikasi, tetapi dampak langsungnya kecil.',
+            'medium' => 'Kerawanan pada aplikasi berpotensi dimanfaatkan pihak yang tidak berwenang untuk memperoleh informasi atau akses yang tidak semestinya.',
+        ],
         'recommendation' => 'Tindak lanjuti temuan sesuai rekomendasi scanner, lakukan pembaruan atau perbaikan konfigurasi, lalu lakukan pemeriksaan ulang.',
         'additional_control' => 'Lakukan vulnerability assessment dan pembaruan perangkat lunak secara berkala.',
     ],

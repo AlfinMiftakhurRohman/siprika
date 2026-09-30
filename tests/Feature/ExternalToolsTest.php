@@ -93,7 +93,7 @@ class ExternalToolsTest extends TestCase
         // Severity high: dampak 4, kemungkinan 3 (bagian 24.4)
         $risk = $target->riskItems->firstWhere('finding_key', 'nuclei:CVE-2023-1234');
         $this->assertSame(17, $risk->inherent_risk);
-        $this->assertSame('Aplikasi tidak update (Contoh CMS Vulnerability (CVE-2023-1234))', $risk->vulnerability);
+        $this->assertSame('Aplikasi tidak update (Contoh CMS Vulnerability (CVE-2023-1234) di /x)', $risk->vulnerability);
 
         $exposure = $target->findings->firstWhere('finding_key', 'exposed-sensitive-file');
         $this->assertStringNotContainsString('rahasia123', $exposure->evidences->first()->raw['snippet']);
@@ -482,6 +482,11 @@ class ExternalToolsTest extends TestCase
         $this->assertNotContains('Varnish', $names);
         $this->assertNotContains('Alertlogic', $names);
         $this->assertNotContains('Detect Amazon-S3 Bucket', $names);
+        // Hasil heuristik yang keliru juga bukan temuan, tetapi tetap tercatat di hasil mentah Nuclei
+        $this->assertFalse($target->findings->contains(fn ($finding) => in_array($finding->finding_key, ['nuclei:waf-detect', 'nuclei:s3-detect'], true)));
+        $results = array_column($target->observations->firstWhere('check_key', 'nuclei')->raw['results'], 'template');
+        $this->assertContains('waf-detect:varnish', $results);
+        $this->assertContains('s3-detect', $results);
         $this->assertContains('Font Awesome', $names);
         $this->assertContains('Google Font Api', $names);
         // "PHP Detect" dan "laravel-framework" sama dengan PHP dan Laravel

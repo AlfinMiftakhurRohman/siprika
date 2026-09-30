@@ -40,7 +40,7 @@ class AiAnalyzer
         $purged = $this->purgeInvalid($target);
 
         foreach ($this->riskFindings($target) as $finding) {
-            if (AiAnalysis::where('finding_key', $finding->finding_key)->exists()) {
+            if (AiAnalysis::current()->where('finding_key', $finding->finding_key)->exists()) {
                 $reused[] = $finding->finding_key;
 
                 continue;
@@ -73,8 +73,8 @@ class AiAnalyzer
                 continue;
             }
 
-            AiAnalysis::create([
-                'finding_key' => $finding->finding_key,
+            // Hasil dari prompt lama untuk kunci yang sama diganti
+            AiAnalysis::updateOrCreate(['finding_key' => $finding->finding_key], [
                 'finding' => $output['finding'],
                 'threat' => $output['threat'],
                 'vulnerability' => $output['vulnerability'],
@@ -82,7 +82,7 @@ class AiAnalyzer
                 'impact_description' => $output['impact_description'],
                 'recommendation' => $output['recommendation'],
                 'additional_control' => $output['additional_control'],
-                'model' => config('siprika.ai.model'),
+                'model' => AiAnalysis::currentTag(),
             ]);
 
             $analyzed[] = $finding->finding_key;

@@ -153,9 +153,11 @@ return [
     'nuclei_exposure_tags' => ['exposure', 'config', 'backup', 'logs'],
     'nuclei_exposure_min_severity' => 'medium',
 
-    // Template bertag tech yang bukan nama teknologi. waf-detect sering cocok dengan beberapa WAF sekaligus
-    // (contoh varnish, apachegeneric, dan alertlogic pada server LiteSpeed), CDN/WAF memakai deteksi bawaan.
-    'nuclei_not_technology' => ['waf-detect', 's3-detect'],
+    // Template heuristik yang sering keliru, hanya dicatat di hasil mentah (daftar hasil Nuclei dan laporan mentah),
+    // bukan teknologi maupun temuan. Uji e-sakip: waf-detect cocok dengan varnish, apachegeneric, dan alertlogic
+    // sekaligus hanya karena kata umum di halaman error LiteSpeed, dan s3-detect cocok dengan halaman error 400 di /%c0.
+    // CDN/WAF memakai deteksi bawaan (overview), yang tidak menemukan WAF pada website tersebut.
+    'nuclei_raw_only' => ['waf-detect', 's3-detect'],
 
     // Kunci yang hanya berlaku pada respons HTTPS (bagian 23.1: header HSTS pada respons HTTP diabaikan)
     'https_only_findings' => ['missing-hsts'],

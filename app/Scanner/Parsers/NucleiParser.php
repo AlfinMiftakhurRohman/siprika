@@ -69,6 +69,11 @@ class NucleiParser
             $result = self::normalize($item);
             $parsed['results'][] = ['template' => $result['full_id'], 'severity' => $result['severity']->value, 'matched_at' => $result['matched_at'], 'name' => $result['name']];
 
+            // Template heuristik yang sering keliru hanya dicatat di hasil mentah
+            if (in_array($result['template_id'], config('siprika_scanner.nuclei_raw_only', []), true)) {
+                continue;
+            }
+
             if (self::isTechnology($result)) {
                 $parsed['technologies'][] = ['name' => self::technologyName($result), 'category' => 'Teknologi (Nuclei)', 'version' => null, 'source' => 'nuclei'];
 
@@ -126,8 +131,7 @@ class NucleiParser
     {
         return in_array('tech', $result['tags'], true)
             && $result['severity'] === Severity::Info
-            && self::mapEntry($result) === null
-            && ! in_array($result['template_id'], config('siprika_scanner.nuclei_not_technology', []), true);
+            && self::mapEntry($result) === null;
     }
 
     /**
@@ -196,6 +200,10 @@ class NucleiParser
      */
     public static function acceptsStoredEvidence(string $key, array $raw): bool
     {
+        if (in_array(substr($key, strlen('nuclei:')), config('siprika_scanner.nuclei_raw_only', []), true) && str_starts_with($key, 'nuclei:')) {
+            return false;
+        }
+
         return $key !== 'tls-weak-cipher' || self::hasWeakCipher(array_values(array_map('strval', (array) ($raw['extracted'] ?? []))));
     }
 

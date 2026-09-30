@@ -7,6 +7,7 @@ use App\Scanner\Data\FindingData;
 use App\Scanner\Fingerprint;
 use App\Scanner\Network\HttpExchange;
 use App\Scanner\ScanContext;
+use Illuminate\Support\Str;
 
 /**
  * Pemeriksaan header keamanan pada respons halaman utama final (bagian 23.1).
@@ -117,7 +118,16 @@ class SecurityHeadersCheck implements Check
             return;
         }
 
-        $context->observe('header-csp', self::LABELS['header-csp'], 'internal', ObservationStatus::Pass, $header !== null ? 'Header Content-Security-Policy ada.' : 'CSP diterapkan melalui tag meta.', $raw);
+        // Status tetap PASS sesuai kriteria (bagian 23), tetapi isi CSP ditampilkan supaya CSP yang hanya berisi
+        // upgrade-insecure-requests tidak terbaca seolah membatasi script (uji e-sakip)
+        $policy = (string) ($header ?? $meta);
+        $summary = ($header !== null ? 'Content-Security-Policy: ' : 'CSP melalui tag meta: ').Str::limit(trim($policy), 150);
+
+        if (! preg_match('/(^|;)\s*(default-src|script-src)\b/i', $policy)) {
+            $summary .= ' (tanpa default-src atau script-src, sehingga tidak membatasi sumber script)';
+        }
+
+        $context->observe('header-csp', self::LABELS['header-csp'], 'internal', ObservationStatus::Pass, $summary, $raw);
     }
 
     private function checkFrameOptions(ScanContext $context, HttpExchange $response): void

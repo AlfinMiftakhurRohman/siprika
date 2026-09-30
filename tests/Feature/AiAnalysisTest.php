@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Ai\AiAnalyzer;
 use App\Ai\AiOutputValidator;
 use App\Ai\SiteEvidence;
 use App\Enums\ObservationStatus;
@@ -285,8 +286,8 @@ class AiAnalysisTest extends TestCase
         app(RiskEngine::class)->assess($target);
         $this->assertSame('catalog', $target->riskItems()->firstWhere('finding_key', 'missing-hsts')->text_source);
 
-        // Hasil tersimpan yang umum tetap dipakai
-        AiAnalysis::query()->update(['recommendation' => 'Aktifkan HSTS dengan max-age minimal satu tahun.']);
+        // Hasil tersimpan yang umum dari prompt saat ini tetap dipakai
+        AiAnalysis::query()->update(['recommendation' => 'Aktifkan HSTS dengan max-age minimal satu tahun.', 'model' => AiAnalysis::currentTag()]);
         app(RiskEngine::class)->assess($target);
         $this->assertSame('ai', $target->riskItems()->firstWhere('finding_key', 'missing-hsts')->text_source);
     }
@@ -308,5 +309,91 @@ class AiAnalysisTest extends TestCase
 
         $this->assertSame(0, AiAnalysis::count());
         $this->assertSame('catalog', $target->riskItems()->firstWhere('finding_key', 'missing-hsts')->text_source);
+    }
+
+    public function test_teks_acuan_katalog_ikut_dikirim_supaya_ai_tidak_mengarang_dampak(): void
+    {
+        $this->fakeSite(self::aiReply());
+
+        $this->scan();
+
+        Http::assertSent(function (Request $request) {
+            if ($request->url() !== self::AI_URL) {
+                return false;
+            }
+
+            $input = json_decode($request->data()['messages'][1]['content'], true);
+            $system = $request->data()['messages'][0]['content'];
+
+            return $input['acuan'] === [
+                'dampak' => config('siprika_catalog.missing-hsts.impact_description'),
+                'rencana_aksi' => config('siprika_catalog.missing-hsts.recommendation'),
+                'kontrol_tambahan' => config('siprika_catalog.missing-hsts.additional_control'),
+            ]
+                && str_contains($system, 'jangan menambah dampak')
+                && str_contains($system, 'Jangan melebih-lebihkan');
+        });
+
+        $this->assertSame(AiAnalysis::currentTag(), AiAnalysis::firstWhere('finding_key', 'missing-hsts')->model);
+    }
+
+    public function test_hasil_ai_dari_prompt_lama_tidak_dipakai_dan_dibuat_ulang(): void
+    {
+        // Teks dari prompt versi 1 (tanpa acuan katalog) yang melebih-lebihkan dampak
+        AiAnalysis::create([
+            'finding_key' => 'missing-hsts',
+            'impact_description' => 'Pengunjung dapat terjebak pada salinan situs yang tidak aman.',
+            'model' => config('siprika.ai.model'),
+        ] + array_fill_keys(AiOutputValidator::KEYS, 'Teks lama.'));
+
+        // AI mati: yang lama tidak dipakai, kembali ke teks katalog
+        $this->fakeSite('timeout');
+        $target = $this->scan();
+        $item = $target->riskItems->firstWhere('finding_key', 'missing-hsts');
+        $this->assertSame('catalog', $item->text_source);
+        $this->assertSame(config('siprika_catalog.missing-hsts.impact_description'), $item->impact_description);
+
+        // AI hidup: dibuat ulang dengan prompt saat ini, menggantikan yang lama
+        $this->fakeSite(self::aiReply());
+        $target = $this->scan();
+
+        $this->assertSame(1, AiAnalysis::count());
+        $this->assertSame(AiAnalysis::currentTag(), AiAnalysis::first()->model);
+        $this->assertStringStartsWith('Dampak versi AI', $target->riskItems->firstWhere('finding_key', 'missing-hsts')->impact_description);
+    }
+
+    public function test_jawaban_ai_dibatasi_schema_supaya_semua_kolom_selalu_terisi(): void
+    {
+        $this->fakeSite(self::aiReply());
+
+        $this->scan();
+
+        Http::assertSent(function (Request $request) {
+            $format = $request->data()['response_format'] ?? [];
+
+            return $request->url() === self::AI_URL
+                && $format['type'] === 'json_object'
+                && $format['schema']['required'] === AiOutputValidator::KEYS
+                && $format['schema']['properties']['vulnerability'] === ['type' => 'string', 'minLength' => 1];
+        });
+    }
+
+    public function test_temuan_nuclei_kecil_tidak_ditulis_berdampak_besar(): void
+    {
+        $this->fakeSite('timeout');
+        $target = $this->scan();
+
+        $low = $target->findings()->create(['finding_key' => 'nuclei:editor-exposure', 'title' => 'Editor Configuration File - Detect', 'description' => 'Editor configuration file was detected.', 'severity' => 'low', 'sources' => ['nuclei']]);
+        $medium = $target->findings()->create(['finding_key' => 'nuclei:laravel-debug-enabled', 'title' => 'Laravel Debug Enabled', 'severity' => 'medium', 'sources' => ['nuclei']]);
+        $high = $target->findings()->create(['finding_key' => 'nuclei:CVE-2021-3129', 'title' => 'Laravel Ignition RCE', 'severity' => 'critical', 'cve' => 'CVE-2021-3129', 'sources' => ['nuclei']]);
+
+        $engine = app(RiskEngine::class);
+        $this->assertStringContainsString('dampak langsungnya kecil', $engine->rule($low)['impact_description']);
+        $this->assertStringContainsString('memperoleh informasi atau akses', $engine->rule($medium)['impact_description']);
+        $this->assertSame(config('siprika_risk.nuclei.impact_description'), $engine->rule($high)['impact_description']);
+
+        // Rekomendasi template scanner ikut menjadi acuan AI
+        $low->update(['recommendation' => 'Remove the file from the web root.']);
+        $this->assertSame('Remove the file from the web root.', app(AiAnalyzer::class)->input($low->fresh())['rekomendasi_scanner']);
     }
 }

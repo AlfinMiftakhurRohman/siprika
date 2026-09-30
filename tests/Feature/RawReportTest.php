@@ -176,4 +176,32 @@ class RawReportTest extends TestCase
         $this->get(route('scans.show', $queued))->assertOk()->assertDontSee(route('scans.raw-report', $queued));
         $this->get(route('targets.show', $waiting))->assertOk()->assertDontSee(route('targets.raw-report', $waiting));
     }
+
+    public function test_hasil_tool_diberi_keterangan_menjadi_temuan_atau_tidak_dipakai_dan_redirect_yang_tidak_ada(): void
+    {
+        $target = $this->scannedTarget();
+
+        // Hasil Nuclei yang menjadi bukti temuan HSTS
+        $nuclei = $target->observations()->where('tool', 'nuclei')->get()->first(fn ($observation) => isset($observation->raw['results']));
+        $nuclei->update(['raw' => ['results' => [
+            ...$nuclei->raw['results'],
+            ['template' => 'http-missing-security-headers:strict-transport-security', 'severity' => 'info', 'matched_at' => 'https://web.jemberkab.go.id', 'name' => 'HTTP Missing Security Headers'],
+            ['template' => 'tech-detect:nginx', 'severity' => 'info', 'matched_at' => 'https://web.jemberkab.go.id', 'name' => 'Wappalyzer Technology Detection'],
+        ]]]);
+        $target->findings()->where('finding_key', 'missing-hsts')->first()->evidences()->create([
+            'source' => 'nuclei', 'detail' => 'template Nuclei cocok', 'endpoint' => 'https://web.jemberkab.go.id',
+            'raw' => ['template' => 'http-missing-security-headers:strict-transport-security'],
+        ]);
+
+        $workbook = $this->workbook($this->get(route('targets.raw-report', $target)));
+        $usage = array_column($this->rows($workbook, 'Nuclei'), 5, 1);
+
+        $this->assertSame('Tidak dipakai: template heuristik yang sering keliru (CDN/WAF memakai deteksi bawaan)', $usage['waf-detect:cloudflare']);
+        $this->assertSame('Temuan: missing-hsts', $usage['http-missing-security-headers:strict-transport-security']);
+        $this->assertSame('Bukan temuan (deteksi teknologi atau informasi yang tidak dinilai)', $usage['tech-detect:nginx']);
+        $this->assertSame(['Informasi ZAP di luar katalog SIPRIKA'], $this->column($workbook, 'OWASP ZAP', 7));
+
+        // Halaman utama langsung 200, tanpa redirect
+        $this->assertSame('Tidak ada', $this->rows($workbook, 'Ringkasan')[0][11]);
+    }
 }

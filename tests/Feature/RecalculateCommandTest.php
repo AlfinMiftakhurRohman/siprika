@@ -140,4 +140,15 @@ class RecalculateCommandTest extends TestCase
             ->doesntExpectOutputToContain('Bukti Nuclei dibuang')
             ->assertSuccessful();
     }
+
+    public function test_hitung_ulang_membuang_hasil_heuristik_nuclei_yang_dulu_dicatat_sebagai_informasi(): void
+    {
+        $target = $this->scan();
+        $waf = $target->findings()->create(['finding_key' => 'nuclei:waf-detect', 'title' => 'WAF Detection', 'severity' => Severity::Info, 'sources' => ['nuclei']]);
+        $waf->evidences()->create(['source' => 'nuclei', 'detail' => 'template Nuclei waf-detect:varnish cocok', 'endpoint' => 'https://web.jemberkab.go.id', 'raw' => ['template' => 'waf-detect:varnish']]);
+
+        $this->artisan('siprika:recalculate', ['batch' => $target->scan_batch_id])->assertSuccessful();
+
+        $this->assertFalse($target->findings()->where('finding_key', 'nuclei:waf-detect')->exists());
+    }
 }
