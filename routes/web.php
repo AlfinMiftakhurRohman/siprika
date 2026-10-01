@@ -19,6 +19,7 @@ Route::get('/scans/{scanBatch}/progress', [ScanController::class, 'progress'])
 Route::get('/scans/{scanBatch}/risk-register', [ScanController::class, 'riskRegister'])->name('scans.risk-register');
 Route::post('/scans/{scanBatch}/cancel', [ScanController::class, 'cancel'])->name('scans.cancel');
 Route::post('/scans/{scanBatch}/rescan', [ScanController::class, 'rescan'])->name('scans.rescan');
+Route::post('/scans/{scanBatch}/retry-failed', [ScanController::class, 'retryFailed'])->name('scans.retry-failed');
 Route::get('/scans/{scanBatch}/export', [ScanController::class, 'export'])->name('scans.export');
 Route::get('/scans/{scanBatch}/raw-report', [ScanController::class, 'rawReport'])->name('scans.raw-report');
 

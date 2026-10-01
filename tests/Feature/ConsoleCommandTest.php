@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\SiprikaInstall;
 use App\Console\Commands\SiprikaPackage;
 use App\Console\Commands\SiprikaServe;
 use App\Enums\ScanMode;
@@ -48,6 +49,15 @@ class ConsoleCommandTest extends TestCase
             ->expectsOutputToContain('http://127.0.0.1:8080, dijalankan otomatis oleh siprika:serve')
             ->expectsOutputToContain('jalankan llama-server sendiri')
             ->assertSuccessful();
+    }
+
+    public function test_siprika_install_mendeteksi_ekstensi_php_yang_belum_aktif(): void
+    {
+        // PHP yang menjalankan test sudah lengkap
+        $this->assertSame([], SiprikaInstall::missingExtensions());
+
+        // PHP baru tanpa gd dan zip: export Excel akan gagal, jadi dilaporkan sejak instalasi
+        $this->assertSame(['gd', 'zip'], SiprikaInstall::missingExtensions(fn (string $extension) => ! in_array($extension, ['gd', 'zip'], true)));
     }
 
     public function test_siprika_install_menguji_verifikasi_sertifikat_ke_website_yang_valid(): void
@@ -103,6 +113,11 @@ class ConsoleCommandTest extends TestCase
             'cache view' => ['storage/framework/views/abc.php', false],
             'file kerja tool' => ['storage/app/private/scans/nuclei-x/out.json', false],
             'git' => ['.git/config', false],
+            'cache config berisi isi .env' => ['bootstrap/cache/config.php', false],
+            'cache route' => ['bootstrap/cache/routes-v7.php', false],
+            'daftar package' => ['bootstrap/cache/packages.php', true],
+            'panduan' => ['PANDUAN.md', true],
+            'peluncur' => ['jalankan-siprika.bat', true],
             'node_modules' => ['node_modules/vite/package.json', false],
             'backslash windows' => ['storage\\logs\\laravel.log', false],
         ];

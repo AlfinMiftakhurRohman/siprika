@@ -24,10 +24,14 @@ class FakeNetwork implements DnsResolver, PortProber, TlsInspector
     /** @var array<string, list<string>|Throwable|Closure(): list<string>> */
     public array $dns = [];
 
+    /** Laptop offline: semua permintaan DNS gagal */
+    public bool $offline = false;
+
     /** @var list<int> */
     public array $openPorts = [80, 443];
 
-    public TlsReport|Throwable|null $tls = null;
+    /** @var TlsReport|Throwable|list<TlsReport|Throwable>|null daftar dipakai berurutan per percobaan, contoh [timeout, sertifikat] */
+    public TlsReport|Throwable|array|null $tls = null;
 
     /**
      * Hasil probe per versi. Nilai berupa list dipakai berurutan per percobaan, contoh ['error', 'rejected'].
@@ -38,6 +42,10 @@ class FakeNetwork implements DnsResolver, PortProber, TlsInspector
 
     public function resolve(string $host): array
     {
+        if ($this->offline) {
+            throw self::dnsFailure();
+        }
+
         $result = $this->dns[$host] ?? ['93.184.216.34'];
 
         // Closure dipakai untuk mensimulasikan DNS yang berubah di antara permintaan (DNS rebinding)
@@ -52,6 +60,12 @@ class FakeNetwork implements DnsResolver, PortProber, TlsInspector
         return $result;
     }
 
+    public function isReachable(string $domain): bool
+    {
+        // DNS yang gagal untuk domain ini berarti server DNS tidak dapat dihubungi, sama seperti SystemDnsResolver
+        return ! $this->offline && ! ($this->dns[$domain] ?? null) instanceof Throwable;
+    }
+
     public function isOpen(string $ip, int $port, float $timeout): bool
     {
         return in_array($port, $this->openPorts, true);
@@ -59,11 +73,13 @@ class FakeNetwork implements DnsResolver, PortProber, TlsInspector
 
     public function inspect(string $host, string $ip, int $port = 443): TlsReport
     {
-        if ($this->tls instanceof Throwable) {
-            throw $this->tls;
+        $result = is_array($this->tls) ? (count($this->tls) > 1 ? array_shift($this->tls) : $this->tls[0]) : $this->tls;
+
+        if ($result instanceof Throwable) {
+            throw $result;
         }
 
-        return $this->tls ?? self::validCertificate($host);
+        return $result ?? self::validCertificate($host);
     }
 
     public function probeProtocol(string $host, string $ip, string $version, int $port = 443): string

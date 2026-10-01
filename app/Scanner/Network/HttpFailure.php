@@ -35,12 +35,34 @@ class HttpFailure extends RuntimeException
             in_array($code, [35, 60, 58, 59, 66, 77, 80, 83, 90, 91], true) => self::TLS,
             $code === 28 => self::TIMEOUT,
             $code === 6 => self::DNS,
-            str_contains(strtolower($message), 'timed out') => self::TIMEOUT,
-            str_contains(strtolower($message), 'refused') => self::REFUSED,
+            // Pesan Windows (WinSock) berbeda dari cURL, contoh "did not properly respond after a period of time"
+            (bool) preg_match('/timed out|did not properly respond|failed to respond/i', $message) => self::TIMEOUT,
+            (bool) preg_match('/refused/i', $message) => self::REFUSED,
             default => self::OTHER,
         };
 
         return new self($kind, $message);
+    }
+
+    /**
+     * Kegagalan koneksi socket (stream_socket_client) dari nomor error sistem, supaya label sesuai penyebabnya:
+     * 10060/110 waktu habis, 10061/111 ditolak (Windows/Linux). Nomor lain dibaca dari pesannya.
+     */
+    public static function fromSocketError(int $errno, string $message): self
+    {
+        return match ($errno) {
+            10060, 110 => new self(self::TIMEOUT, $message),
+            10061, 111 => new self(self::REFUSED, $message),
+            default => self::fromMessage($message),
+        };
+    }
+
+    /**
+     * Gagal karena jaringan (bukan penolakan TLS atau aturan keamanan), sehingga layak diulang (bagian 22.3).
+     */
+    public function isNetwork(): bool
+    {
+        return in_array($this->kind, [self::TIMEOUT, self::REFUSED, self::OTHER], true);
     }
 
     public function kindLabel(): string

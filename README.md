@@ -6,6 +6,8 @@ Sistem Penilaian Risiko Keamanan Aplikasi. SIPRIKA memeriksa keamanan dasar webs
 Website → Scanner → Observation → Finding + Evidence → AI (opsional) → Risk Engine → Risk Register → Excel
 ```
 
+**Pengguna baru:** baca [PANDUAN.md](PANDUAN.md). Isinya cara memasang SIPRIKA dari zip di laptop Windows (PHP, WSL dan tool, AI, OWASP ZAP), cara memakai dan membaca hasil, serta solusi masalah yang sering muncul. README ini berisi catatan teknis untuk pengembang.
+
 Spesifikasi lengkap ada di [docs/blueprint.md](docs/blueprint.md). Bagian "Catatan Pengembangan" di awal dokumen berisi keputusan yang berlaku saat ini.
 
 ## Fitur
@@ -33,13 +35,15 @@ Spesifikasi lengkap ada di [docs/blueprint.md](docs/blueprint.md). Bagian "Catat
 
 ## Kebutuhan
 
-- PHP 8.3 dengan ekstensi curl, openssl, pdo_sqlite, intl, zip, dom (Laragon sudah cukup)
-- Composer dan Node.js (untuk build CSS)
+Langkah pemasangan lengkap untuk pengguna (dari zip) ada di [PANDUAN.md](PANDUAN.md). Ringkasnya:
+
+- PHP 8.3 64-bit dengan ekstensi curl, fileinfo, gd, mbstring, openssl, pdo_sqlite, dan zip (`siprika:install` menolak jalan dan menyebutkan ekstensi yang belum aktif)
+- Composer dan Node.js hanya untuk instalasi dari source (zip sudah berisi `vendor` dan aset tampilan)
 - Opsional, untuk Mode Standar dan Nuclei: WSL Ubuntu berisi `nuclei`, `testssl.sh`, `whatweb`, dan `nmap`
 - Opsional, untuk AI: `llama-server` (llama.cpp build CPU Windows) dan model `qwen2.5-7b-instruct.Q4_K_M.gguf`, lihat bagian Model AI
 - Opsional, untuk passive scan Mode Standar: OWASP ZAP 2.17 dan Java 17 (ZAP dijalankan sebagai daemon)
 
-## Instalasi
+## Instalasi dari source (pengembang)
 
 ```
 composer install
@@ -47,7 +51,7 @@ npm install && npm run build
 php artisan siprika:install
 ```
 
-`siprika:install` membuat `.env` (jika belum ada), APP_KEY, database SQLite, menjalankan migrasi, lalu menampilkan ringkasan konfigurasi.
+`siprika:install` memeriksa ekstensi PHP, membuat `.env` (jika belum ada), APP_KEY, database SQLite, menjalankan migrasi, lalu menampilkan ringkasan konfigurasi. Perintah ini aman diulang untuk melihat ringkasan konfigurasi. `jalankan-siprika.bat` menjalankannya otomatis jika `.env` atau database belum ada.
 
 ## Menjalankan
 
@@ -55,11 +59,15 @@ php artisan siprika:install
 php artisan siprika:serve
 ```
 
+Atau cukup klik dua kali **`jalankan-siprika.bat`** di folder SIPRIKA: jendela SIPRIKA terbuka dan browser membuka http://127.0.0.1:8000 setelah sekitar 8 detik. Biarkan jendela itu terbuka selama memakai SIPRIKA; menutupnya menghentikan SIPRIKA.
+
 Buka http://127.0.0.1:8000. Perintah ini menjalankan web server, queue worker, llama-server (jika `AI_SERVER_COMMAND` diisi), dan ZAP (jika `ZAP_SERVER_COMMAND` diisi). Setelah mengubah `.env`, hentikan (Ctrl+C) lalu jalankan ulang perintah ini, karena queue worker memakai environment saat pertama dijalankan.
 
 Web server memakai OPcache jika tersedia (PHP Laragon sudah menyertakannya), sehingga halaman terbuka dalam puluhan milidetik. Database SQLite memakai mode WAL, jadi halaman tetap responsif walaupun pemeriksaan sedang menulis hasil. Jika port 8000 sudah dipakai, misalnya SIPRIKA sudah berjalan di jendela lain, perintah berhenti tanpa menjalankan apa pun. Jika port itu dipakai aplikasi lain, gunakan `php artisan siprika:serve --port=8001`.
 
 Jika SIPRIKA dihentikan saat sebuah website sedang diperiksa, website itu ditandai gagal ketika `siprika:serve` dijalankan lagi dan antrean berikutnya langsung dilanjutkan. Gunakan tombol **Pindai Ulang** untuk memeriksanya kembali.
+
+Jika koneksi internet laptop terputus (contoh Wi-Fi putus), antrean berhenti sementara dan website berikutnya menampilkan "Menunggu koneksi internet". Pemeriksaan dilanjutkan otomatis setelah koneksi kembali, paling lama menunggu `SCAN_OFFLINE_WAIT` (bawaan 30 menit). Website yang sedang diperiksa saat koneksi terputus dimasukkan lagi ke akhir antrean satu kali, karena ERROR-nya bukan berasal dari website. Tombol **Pindai Ulang yang Gagal** memeriksa ulang semua website berstatus Gagal atau Sebagian gagal di batch yang sama, sehingga Risk Register satu batch tetap lengkap. Wi-Fi yang lemah atau sering putus membuat banyak pemeriksaan gagal; untuk batch besar gunakan kabel LAN atau sinyal Wi-Fi yang kuat.
 
 Setelah mengubah aturan risiko di `config/siprika_risk.php` atau memperbarui aplikasi, hitung ulang Risk Register batch yang sudah ada tanpa memindai ulang website dan tanpa memanggil AI:
 
@@ -98,13 +106,9 @@ php artisan siprika:package            # membuat siprika-<tanggal>.zip di sampin
 php artisan siprika:package --dry-run  # hanya menampilkan jumlah file dan ukuran
 ```
 
-Zip berisi aplikasi siap pakai termasuk `vendor`, aset tampilan, model AI, dan llama.cpp (sekitar 4,5 GB). Yang **tidak** ikut: `.env` (APP_KEY dan kunci ZAP), `database/database.sqlite` (hasil pemeriksaan website, data sensitif), log, dan cache.
+Zip berisi aplikasi siap pakai termasuk `vendor`, aset tampilan, model AI, llama.cpp, dan [PANDUAN.md](PANDUAN.md) (sekitar 4,5 GB). Yang **tidak** ikut: `.env` (APP_KEY dan kunci ZAP), `database/database.sqlite` (hasil pemeriksaan website, data sensitif), cache config di `bootstrap/cache` (berisi isi `.env` dan path laptop pengirim), log, dan cache lain.
 
-Di laptop penerima:
-
-1. Pasang Laragon (PHP 8.3). Untuk Mode Standar, pasang juga WSL Ubuntu berisi `nuclei`, `testssl.sh`, `whatweb`, `nmap`, serta OWASP ZAP dan Java 17 (opsional).
-2. Ekstrak zip, buka terminal di folder `siprika`, jalankan `php artisan siprika:install`.
-3. Sesuaikan `.env` (path tool, `AI_ENABLED=true`, `AI_SERVER_COMMAND`, `ZAP_*`), lalu jalankan `php artisan siprika:serve`.
+Penerima cukup memasang PHP 8.3, mengekstrak zip, lalu klik dua kali `jalankan-siprika.bat`. Persiapan awal berjalan otomatis. Tool WSL, AI, dan ZAP dipasang mengikuti [PANDUAN.md](PANDUAN.md).
 
 ## Konfigurasi (.env)
 
@@ -112,6 +116,7 @@ Di laptop penerima:
 |---|---|
 | `SCAN_ALLOWED_DOMAINS` | `*` atau kosong berarti semua domain boleh diperiksa. Isi daftar dipisah koma untuk membatasi, contoh `jemberkab.go.id`. |
 | `SCAN_TARGET_TIMEOUT`, `SCAN_QUICK_TARGET_TIMEOUT` | Batas waktu per website (detik) untuk Mode Standar (2700) dan Mode Cepat (600). |
+| `SCAN_OFFLINE_WAIT` | Lama maksimal antrean menunggu koneksi internet kembali saat laptop offline (detik, bawaan 1800). |
 | `SCAN_USER_AGENT` | User-Agent tetap supaya admin website mengenali pemeriksaan. |
 | `NUCLEI_PATH`, `TESTSSL_PATH`, `WHATWEB_PATH`, `NMAP_PATH` | Perintah tool, contoh `"wsl -d Ubuntu -e nuclei"`. Kosong berarti pemeriksaan dicatat NOT ASSESSED. |
 | `AI_ENABLED`, `AI_URL`, `AI_TIMEOUT` | AI lokal (llama-server, default port 8081). |

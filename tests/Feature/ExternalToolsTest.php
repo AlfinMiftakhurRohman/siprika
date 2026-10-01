@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\ObservationStatus;
 use App\Enums\ScanMode;
 use App\Enums\ScanTargetStatus;
+use App\Jobs\ProcessScanTarget;
 use App\Models\ScanTarget;
 use App\Scanner\Evidence;
 use App\Scanner\Parsers\NmapParser;
@@ -19,6 +20,7 @@ use Illuminate\Process\PendingProcess;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Sleep;
 use Tests\Support\FakeNetwork;
 use Tests\Support\InteractsWithScanner;
 use Tests\TestCase;
@@ -373,6 +375,7 @@ class ExternalToolsTest extends TestCase
 
     public function test_testssl_yang_gagal_di_tengah_jalan_tidak_dianggap_pass(): void
     {
+        Sleep::fake();
         config(['siprika.tools.testssl.command' => 'testssl.sh']);
         self::fakeToolWritingFile('testssl.json', json_encode([
             ['id' => 'engine_problem', 'severity' => 'WARN', 'finding' => 'No engine or GOST support'],
@@ -386,9 +389,79 @@ class ExternalToolsTest extends TestCase
         $this->assertStringContainsString("Can't connect", $observation->summary);
         $this->assertSame(ScanTargetStatus::Partial, $target->status);
 
+        // Koneksi yang gagal sudah diulang satu kali (bagian 22.3), koneksi internet laptop sendiri tidak terputus
+        Process::assertRanTimes(fn (PendingProcess $process) => str_contains(self::commandOf($process), 'testssl.sh'), 2);
+        Sleep::assertSleptTimes(1);
+        $this->assertStringContainsString("Can't connect", $observation->raw['retried']);
+        $this->assertStringNotContainsString('laptop', $observation->summary);
+
         // File hasil tanpa data protokol juga bukan PASS
         $this->assertNotNull(TestsslParser::parse([['id' => 'service', 'severity' => 'INFO', 'finding' => 'HTTP']], self::HOME)['problem']);
         $this->assertNull(TestsslParser::parse(json_decode(self::fixture('testssl-diskominfo.json'), true), self::HOME)['problem']);
+    }
+
+    public function test_testssl_yang_tidak_dapat_terhubung_diulang_satu_kali(): void
+    {
+        Sleep::fake();
+        config(['siprika.tools.testssl.command' => 'testssl.sh']);
+        $runs = 0;
+
+        // Percobaan pertama gagal terhubung (contoh Wi-Fi tersendat), percobaan kedua berhasil
+        Process::fake(function (PendingProcess $process) use (&$runs) {
+            $contents = ++$runs === 1
+                ? json_encode([['id' => 'scanProblem', 'severity' => 'FATAL', 'finding' => "Can't connect to '93.184.216.34:443' Make sure a firewall is not between you and your scanning target!"]])
+                : self::fixture('testssl-diskominfo.json');
+            file_put_contents($process->path.DIRECTORY_SEPARATOR.'testssl.json', $contents);
+
+            return Process::result('');
+        });
+
+        $target = $this->scan();
+
+        $observation = $target->observations->firstWhere('check_key', 'testssl');
+        $this->assertSame(2, $runs);
+        Sleep::assertSleptTimes(1);
+        $this->assertSame(ObservationStatus::Fail, $observation->status);
+        $this->assertStringContainsString('TLS 1.1', $observation->summary);
+        $this->assertStringContainsString("Can't connect", $observation->raw['retried']);
+    }
+
+    public function test_testssl_yang_gagal_bukan_karena_koneksi_tidak_diulang(): void
+    {
+        Sleep::fake();
+        config(['siprika.tools.testssl.command' => 'testssl.sh']);
+        self::fakeToolWritingFile('testssl.json', json_encode([
+            ['id' => 'scanProblem', 'severity' => 'FATAL', 'finding' => "Server doesn't seem to be a TLS/SSL enabled server"],
+        ]));
+
+        $target = $this->scan();
+
+        Process::assertRanTimes(fn (PendingProcess $process) => str_contains(self::commandOf($process), 'testssl.sh'), 1);
+        Sleep::assertNeverSlept();
+        $this->assertSame(ObservationStatus::Error, $target->observations->firstWhere('check_key', 'testssl')->status);
+    }
+
+    public function test_testssl_yang_gagal_terhubung_saat_laptop_offline_tidak_menyalahkan_website(): void
+    {
+        Sleep::fake();
+        config(['siprika.tools.testssl.command' => 'testssl.sh']);
+
+        // Wi-Fi terputus saat testssl.sh berjalan, kedua percobaan gagal terhubung
+        Process::fake(function (PendingProcess $process) {
+            $this->network->offline = true;
+            file_put_contents($process->path.DIRECTORY_SEPARATOR.'testssl.json', json_encode([
+                ['id' => 'scanProblem', 'severity' => 'FATAL', 'finding' => "Can't connect to '93.184.216.34:443' Make sure a firewall is not between you and your scanning target!"],
+            ]));
+
+            return Process::result('');
+        });
+
+        $target = $this->scan(requeued: true);
+
+        $observation = $target->observations->firstWhere('check_key', 'testssl');
+        $this->assertSame(ObservationStatus::Error, $observation->status);
+        $this->assertStringContainsString('Koneksi internet laptop terputus saat itu.', $observation->summary);
+        $this->assertSame(ProcessScanTarget::NETWORK_LOST_MESSAGE, $target->error_message);
     }
 
     public function test_output_asli_whatweb_dibaca_tanpa_mengikuti_redirect(): void

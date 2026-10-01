@@ -63,6 +63,14 @@ enum ScanTargetStatus: string
     }
 
     /**
+     * Target gagal atau sebagian gagal, yang dapat diperiksa ulang di batch yang sama.
+     */
+    public function isRetryable(): bool
+    {
+        return in_array($this, [self::Failed, self::Partial], true);
+    }
+
+    /**
      * Target yang hasilnya bisa ditampilkan dan diekspor.
      */
     public function hasResult(): bool

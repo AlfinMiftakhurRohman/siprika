@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 
 #[Fillable(['position', 'url', 'host', 'status', 'overview', 'progress', 'started_at', 'finished_at', 'error_message'])]
 class ScanTarget extends Model
@@ -100,6 +101,28 @@ class ScanTarget extends Model
     public function remainingSeconds(): ?int
     {
         return $this->status === ScanTargetStatus::Running ? ScanProgress::remainingSeconds($this->progress ?? [], now()->getTimestampMs() / 1000) : null;
+    }
+
+    /**
+     * Hapus hasil pemeriksaan dan kembalikan website ke antrean, supaya diperiksa ulang dari awal di batch yang sama.
+     * Bukti temuan ikut terhapus lewat foreign key.
+     */
+    public function resetResults(?string $note = null): void
+    {
+        DB::transaction(function () use ($note) {
+            $this->riskItems()->delete();
+            $this->findings()->delete();
+            $this->observations()->delete();
+
+            $this->update([
+                'status' => ScanTargetStatus::Queued,
+                'overview' => null,
+                'progress' => null,
+                'started_at' => null,
+                'finished_at' => null,
+                'error_message' => $note,
+            ]);
+        });
     }
 
     /**

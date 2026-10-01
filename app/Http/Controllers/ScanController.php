@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\ScanMode;
 use App\Enums\ScanTargetStatus;
 use App\Http\Requests\StoreScanRequest;
+use App\Jobs\ProcessScanTarget;
 use App\Models\RiskRegisterItem;
 use App\Models\ScanBatch;
 use App\Models\ScanTarget;
@@ -151,6 +152,29 @@ class ScanController extends Controller
 
         return redirect()->route('scans.show', $batch)
             ->with('status', "Pemindaian ulang Batch #{$scanBatch->id}. Hasil lama tetap tersimpan di batch tersebut.");
+    }
+
+    /**
+     * Periksa ulang website berstatus Gagal atau Sebagian gagal di batch yang sama, contoh setelah koneksi internet
+     * laptop sempat terputus. Hasil lama website tersebut diganti, website lain tidak diperiksa ulang.
+     */
+    public function retryFailed(ScanBatch $scanBatch): RedirectResponse
+    {
+        if ($scanBatch->isRunning()) {
+            return redirect()->route('scans.show', $scanBatch)
+                ->with('status', "Batch #{$scanBatch->id} masih berjalan. Pindai ulang dapat dilakukan setelah semua website selesai diperiksa.");
+        }
+
+        $targets = $scanBatch->targets->filter(fn (ScanTarget $target) => $target->status->isRetryable());
+
+        foreach ($targets as $target) {
+            $target->resetResults();
+            ProcessScanTarget::dispatch($target);
+        }
+
+        return redirect()->route('scans.show', $scanBatch)->with('status', $targets->isEmpty()
+            ? 'Tidak ada website yang gagal di batch ini.'
+            : "{$targets->count()} website yang gagal atau sebagian gagal dimasukkan lagi ke antrean batch ini.");
     }
 
     public function cancel(ScanBatch $scanBatch): RedirectResponse

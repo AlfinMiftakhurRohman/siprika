@@ -39,6 +39,7 @@ class TargetValidationCheck implements Check
         try {
             $ips = $this->resolveWithRetry($context->host());
         } catch (RuntimeException $e) {
+            $context->networkLost = true;
             $this->fail($context, ObservationStatus::Error, 'DNS gagal: '.$e->getMessage());
         }
 

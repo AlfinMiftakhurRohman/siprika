@@ -258,6 +258,22 @@ class NucleiRetryTest extends TestCase
         $this->assertSame(ScanTargetStatus::Partial, $target->status);
     }
 
+    public function test_request_yang_gagal_karena_koneksi_laptop_terputus_tidak_menyalahkan_website(): void
+    {
+        $this->fakeNuclei([
+            ['errors' => array_fill(0, 12, self::failure('x-panel'))],
+            // Wi-Fi terputus saat template yang gagal diulang
+            ['errors' => array_fill(0, 10, self::failure('x-panel')), 'then' => fn () => $this->network->offline = true],
+        ]);
+
+        $target = $this->scan(requeued: true);
+
+        $nuclei = $this->nuclei($target);
+        $this->assertSame(ObservationStatus::Error, $nuclei->status);
+        $this->assertStringContainsString('Koneksi internet laptop terputus saat Nuclei berjalan (10 request ke website gagal', $nuclei->summary);
+        $this->assertStringNotContainsString('Website membatasi', $nuclei->summary);
+    }
+
     public function test_kecepatan_kembali_normal_untuk_run_berikutnya_jika_website_tidak_memblokir(): void
     {
         // Mode Cepat punya dua run; run pertama sempat gagal sedikit

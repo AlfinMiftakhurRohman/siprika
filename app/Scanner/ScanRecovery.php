@@ -34,6 +34,9 @@ class ScanRecovery
             ]);
         }
 
+        // Catatan "Menunggu koneksi internet" dari worker yang sudah berhenti
+        ScanTarget::where('status', ScanTargetStatus::Queued->value)->whereNotNull('progress')->update(['progress' => null]);
+
         Cache::lock(ProcessScanTarget::overlapLockKey())->forceRelease();
         $this->removeStaleWorkDirectories();
 

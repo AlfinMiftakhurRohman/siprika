@@ -50,7 +50,7 @@ class TlsCheck implements Check
         $port = $context->httpsPort();
 
         try {
-            $report = $this->inspector->inspect($host, $ip, $port);
+            $report = $this->inspect($host, $ip, $port);
         } catch (HttpFailure $e) {
             $this->all($context, ObservationStatus::Error, "Koneksi TLS gagal ({$e->kindLabel()}): ".mb_substr($e->getMessage(), 0, 200));
 
@@ -156,6 +156,26 @@ class TlsCheck implements Check
         }
 
         $context->observe('tls-expiry', $label, 'internal', ObservationStatus::Pass, "Berlaku hingga {$report->validTo->toDateString()} (sisa {$daysLeft} hari).", $raw);
+    }
+
+    /**
+     * Kegagalan jaringan (contoh website sesaat lambat menjawab) diulang satu kali sebelum dicatat ERROR (bagian 22.3).
+     *
+     * @throws HttpFailure
+     */
+    private function inspect(string $host, string $ip, int $port): TlsReport
+    {
+        try {
+            return $this->inspector->inspect($host, $ip, $port);
+        } catch (HttpFailure $e) {
+            if (! $e->isNetwork()) {
+                throw $e;
+            }
+
+            usleep(500_000);
+
+            return $this->inspector->inspect($host, $ip, $port);
+        }
     }
 
     private function checkProtocols(ScanContext $context, string $host, string $ip, int $port, string $endpoint, TlsReport $report): void

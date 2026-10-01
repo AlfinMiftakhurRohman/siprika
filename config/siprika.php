@@ -34,6 +34,12 @@ return [
         'target_timeout' => (int) env('SCAN_TARGET_TIMEOUT', 2700),
         'quick_target_timeout' => (int) env('SCAN_QUICK_TARGET_TIMEOUT', 600),
 
+        // Laptop offline (server DNS tidak dapat dihubungi, contoh Wi-Fi terputus): antrean dijeda dan dicek setiap
+        // offline_check_interval detik sampai koneksi kembali. Lewat offline_wait detik, website tetap diperiksa
+        // dan dicatat DNS gagal.
+        'offline_wait' => (int) env('SCAN_OFFLINE_WAIT', 1800),
+        'offline_check_interval' => 15,
+
         'user_agent' => env('SCAN_USER_AGENT', 'SIPRIKA/1.0 (Diskominfo Jember)'),
 
         'max_redirects' => 5,

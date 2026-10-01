@@ -28,9 +28,8 @@ class StreamTlsInspector implements TlsInspector
         ]);
 
         if ($result['stream'] === false) {
-            $kind = $result['errno'] !== 0 ? HttpFailure::fromMessage($result['error'])->kind : HttpFailure::TLS;
-
-            throw new HttpFailure($kind === HttpFailure::OTHER ? HttpFailure::REFUSED : $kind, $result['error']);
+            // errno 0: koneksi terbentuk tetapi handshake TLS gagal
+            throw $result['errno'] !== 0 ? HttpFailure::fromSocketError($result['errno'], $result['error']) : new HttpFailure(HttpFailure::TLS, $result['error']);
         }
 
         $params = stream_context_get_params($result['stream'])['options']['ssl'] ?? [];

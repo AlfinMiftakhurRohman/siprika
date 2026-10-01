@@ -43,6 +43,9 @@ class ScanContext
     /** @var list<FindingData> */
     public array $findings = [];
 
+    /** Koneksi internet laptop terputus saat pemeriksaan (server DNS tidak dapat dihubungi), ERROR bukan dari website */
+    public bool $networkLost = false;
+
     public function __construct(
         public readonly ScanTarget $target,
         public readonly SafeHttpClient $http,

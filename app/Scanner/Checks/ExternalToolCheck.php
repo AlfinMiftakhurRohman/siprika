@@ -79,7 +79,9 @@ abstract class ExternalToolCheck implements Check
         try {
             $ips = $this->dns->resolve($host);
         } catch (RuntimeException) {
-            $ips = [];
+            $context->networkLost = true;
+
+            return "{$this->label()} tidak dijalankan: koneksi internet laptop terputus (server DNS tidak merespons saat {$host} diperiksa ulang).";
         }
 
         if ($ips === []) {
@@ -156,6 +158,19 @@ abstract class ExternalToolCheck implements Check
     protected function timeout(ScanContext $context): int
     {
         return min((int) config("siprika.tools.{$this->tool()}.timeout"), $context->remainingSeconds());
+    }
+
+    /**
+     * Koneksi internet laptop terputus selama pemeriksaan ini, sehingga kegagalan tool bukan disebabkan website.
+     * Ditandai di ScanContext supaya website diperiksa ulang setelah koneksi kembali (ProcessScanTarget).
+     */
+    protected function connectionLost(ScanContext $context): bool
+    {
+        if (! $context->networkLost && ! $this->dns->isReachable($context->host())) {
+            $context->networkLost = true;
+        }
+
+        return $context->networkLost;
     }
 
     /**

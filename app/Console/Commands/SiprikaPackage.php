@@ -28,6 +28,8 @@ class SiprikaPackage extends Command
         '#^storage/logs/(?!\.gitignore$)#',
         '#^storage/framework/(cache|sessions|views|testing)/(?!.*\.gitignore$)#',
         '#^storage/app/private/(?!\.gitignore$)#',
+        // Cache config (php artisan config:cache atau optimize) berisi isi .env dan path laptop ini
+        '#^bootstrap/cache/(?!\.gitignore$|packages\.php$|services\.php$)#',
         '#^public/hot$#',
         '#^(CLAUDE|AGENTS)\.md$#',
         '#^\.phpunit\.result\.cache$#',
@@ -70,7 +72,7 @@ class SiprikaPackage extends Command
 
         $this->components->task('Menulis zip (file model besar, bisa beberapa menit)', fn () => $zip->close());
         $this->components->info("Zip dibuat: {$output}");
-        $this->line('  Penerima menjalankan: php artisan siprika:install, lalu php artisan siprika:serve (lihat README).');
+        $this->line('  Penerima mengikuti PANDUAN.md: ekstrak zip, lalu klik dua kali jalankan-siprika.bat.');
 
         return self::SUCCESS;
     }

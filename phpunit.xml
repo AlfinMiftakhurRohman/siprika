@@ -42,5 +42,7 @@
         <env name="NMAP_PATH" value=""/>
         <env name="ZAP_URL" value=""/>
         <env name="AI_ENABLED" value="false"/>
+        <!-- Antrean tidak menunggu koneksi internet, kecuali test yang mengujinya -->
+        <env name="SCAN_OFFLINE_WAIT" value="0"/>
     </php>
 </phpunit>

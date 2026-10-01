@@ -15,6 +15,7 @@
     $finished = $batch->targets->filter(fn ($target) => $target->status->hasResult())->count();
     $inQueue = $batch->targets->filter(fn ($target) => ! $target->status->isFinished())->count();
     $failed = $batch->targets->filter(fn ($target) => in_array($target->status, [ScanTargetStatus::Failed, ScanTargetStatus::Cancelled], true))->count();
+    $retryable = $batch->targets->filter(fn ($target) => $target->status->isRetryable())->count();
 @endphp
 
 @section('content')
@@ -58,6 +59,17 @@
                         <x-icon name="refresh" class="size-4" /> Pindai Ulang
                     </button>
                 </form>
+
+                @if ($retryable > 0)
+                    <form method="POST" action="{{ route('scans.retry-failed', $batch) }}"
+                          data-confirm="{{ $retryable }} website yang gagal atau sebagian gagal akan diperiksa ulang di batch ini, dan hasil lamanya diganti. Lanjutkan?">
+                        @csrf
+                        <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                                title="Memeriksa ulang website berstatus Gagal atau Sebagian gagal di batch ini, contoh setelah koneksi internet sempat terputus">
+                            <x-icon name="refresh" class="size-4" /> Pindai Ulang yang Gagal ({{ $retryable }})
+                        </button>
+                    </form>
+                @endif
             @endunless
 
             @if ($batch->targets->contains(fn ($t) => $t->status === ScanTargetStatus::Queued))

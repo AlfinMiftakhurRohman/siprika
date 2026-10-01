@@ -27,7 +27,10 @@ class ScanOrchestrator
         private RiskEngine $riskEngine,
     ) {}
 
-    public function run(ScanTarget $target): void
+    /**
+     * @return ScanContext data pemeriksaan, contoh apakah koneksi laptop sempat terputus
+     */
+    public function run(ScanTarget $target): ScanContext
     {
         $mode = $target->batch->mode;
         $context = new ScanContext($target, app(SafeHttpClient::class), microtime(true) + $mode->timeout(), $mode);
@@ -43,7 +46,7 @@ class ScanOrchestrator
         if ($abortReason !== null) {
             $this->markFailed($target, $progress, $abortReason);
 
-            return;
+            return $context;
         }
 
         $this->recordSkippedByMode($target, $mode);
@@ -51,6 +54,8 @@ class ScanOrchestrator
         $this->analyzeWithAi($target, $progress);
         $this->assessRisk($target, $progress);
         $this->markFinished($target);
+
+        return $context;
     }
 
     /**

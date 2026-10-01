@@ -182,6 +182,16 @@ function watchBulkSelection(form) {
 
 document.querySelectorAll('[data-bulk-form]').forEach(watchBulkSelection);
 
+// Form lain dengan data-confirm (contoh Pindai Ulang yang Gagal) meminta konfirmasi sebelum dikirim
+document.querySelectorAll('form[data-confirm]:not([data-bulk-form])').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+        if (!form.dataset.submitting && !window.confirm(form.dataset.confirm)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+    });
+});
+
 // Klik ganda pada Mulai Pemeriksaan, Pindai Ulang, atau Hapus tidak boleh mengirim form dua kali
 document.querySelectorAll('form[method="POST" i]').forEach((form) => {
     form.addEventListener('submit', (event) => {

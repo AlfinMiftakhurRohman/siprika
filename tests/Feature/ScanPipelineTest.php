@@ -10,6 +10,7 @@ use App\Models\ScanObservation;
 use App\Models\ScanTarget;
 use App\Scanner\Fingerprint;
 use App\Scanner\Network\HttpExchange;
+use App\Scanner\Network\HttpFailure;
 use App\Scanner\Network\SafeHttpClient;
 use App\Scanner\Parsers\NucleiParser;
 use Carbon\CarbonImmutable;
@@ -641,6 +642,44 @@ class ScanPipelineTest extends TestCase
         $this->network->protocols['TLSv1.0'] = ['error', 'error'];
         $target = $this->scan(mode: ScanMode::Quick);
         $this->assertSame(ObservationStatus::Error, $this->observation($target, 'tls-protocol')->status);
+    }
+
+    public function test_pemeriksaan_sertifikat_tls_yang_timeout_sesaat_diulang_sekali(): void
+    {
+        FakeNetwork::http([
+            self::HOME => Http::response('<title>TLS</title>', 200, self::secureHeaders()),
+            'http://web.jemberkab.go.id/' => Http::response('', 301, ['Location' => self::HOME]),
+        ]);
+        // Pesan asli Windows saat website lambat menjawab (errno 10060)
+        $timeout = HttpFailure::fromSocketError(10060, 'A connection attempt failed because the connected party did not properly respond after a period of time');
+
+        // Kasus nyata e-sakip: percobaan pertama timeout, percobaan kedua berhasil
+        $this->network->tls = [$timeout, FakeNetwork::validCertificate('web.jemberkab.go.id')];
+        $target = $this->scan(mode: ScanMode::Quick);
+        $this->assertSame(ObservationStatus::Pass, $this->observation($target, 'tls-certificate')->status);
+        $this->assertSame(ScanTargetStatus::Completed, $target->status);
+
+        // Timeout dua kali: ERROR dengan penyebab yang benar, bukan "koneksi ditolak"
+        $this->network->tls = [$timeout, $timeout];
+        $target = $this->scan(mode: ScanMode::Quick);
+        $this->assertSame(ObservationStatus::Error, $this->observation($target, 'tls-certificate')->status);
+        $this->assertStringContainsString('Koneksi TLS gagal (waktu habis)', $this->observation($target, 'tls-certificate')->summary);
+
+        // Handshake TLS yang ditolak bukan masalah jaringan, tidak diulang
+        $this->network->tls = [new HttpFailure(HttpFailure::TLS, 'handshake failure'), FakeNetwork::validCertificate('web.jemberkab.go.id')];
+        $target = $this->scan(mode: ScanMode::Quick);
+        $this->assertSame(ObservationStatus::Error, $this->observation($target, 'tls-certificate')->status);
+    }
+
+    public function test_jenis_kegagalan_koneksi_dikenali_dari_pesan_dan_nomor_error_windows_maupun_linux(): void
+    {
+        $this->assertSame(HttpFailure::TIMEOUT, HttpFailure::fromSocketError(10060, 'x')->kind);
+        $this->assertSame(HttpFailure::TIMEOUT, HttpFailure::fromSocketError(110, 'Connection timed out')->kind);
+        $this->assertSame(HttpFailure::REFUSED, HttpFailure::fromSocketError(10061, 'No connection could be made because the target machine actively refused it')->kind);
+        $this->assertSame(HttpFailure::REFUSED, HttpFailure::fromSocketError(111, 'Connection refused')->kind);
+        $this->assertSame(HttpFailure::TIMEOUT, HttpFailure::fromMessage('A connection attempt failed because the connected party did not properly respond after a period of time')->kind);
+        $this->assertSame(HttpFailure::OTHER, HttpFailure::fromSocketError(10065, 'A socket operation was attempted to an unreachable host')->kind);
+        $this->assertSame('waktu habis', HttpFailure::fromSocketError(10060, 'x')->kindLabel());
     }
 
     public function test_deteksi_teknologi_tidak_tertipu_nama_fungsi_javascript(): void

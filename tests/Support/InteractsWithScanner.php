@@ -35,7 +35,11 @@ trait InteractsWithScanner
         ]);
     }
 
-    protected function scan(string $url = 'https://web.jemberkab.go.id', ?ScanBatch $batch = null, ScanMode $mode = ScanMode::Standard): ScanTarget
+    /**
+     * @param  bool  $requeued  website sudah pernah dimasukkan lagi ke antrean karena koneksi laptop terputus, sehingga
+     *                          hasil yang terpengaruh koneksi tetap disimpan (tidak dibuang untuk diperiksa ulang)
+     */
+    protected function scan(string $url = 'https://web.jemberkab.go.id', ?ScanBatch $batch = null, ScanMode $mode = ScanMode::Standard, bool $requeued = false): ScanTarget
     {
         $batch ??= ScanBatch::create(['mode' => $mode]);
         $target = $batch->targets()->create([
@@ -44,7 +48,9 @@ trait InteractsWithScanner
             'host' => parse_url($url, PHP_URL_HOST),
         ]);
 
-        ProcessScanTarget::dispatchSync($target);
+        $job = new ProcessScanTarget($target);
+        $job->requeued = $requeued;
+        dispatch_sync($job);
 
         return $target->fresh();
     }

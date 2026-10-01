@@ -18,8 +18,27 @@ use RuntimeException;
 #[Description('Menyiapkan SIPRIKA: file .env, APP_KEY, database SQLite, dan migrasi')]
 class SiprikaInstall extends Command
 {
+    /**
+     * Ekstensi PHP yang tidak selalu aktif di php.ini: cURL (koneksi dikunci ke IP yang sudah dicek), SQLite (database),
+     * openssl (TLS), serta fileinfo, gd, mbstring, dan zip (Excel).
+     */
+    public const REQUIRED_EXTENSIONS = ['curl', 'fileinfo', 'gd', 'mbstring', 'openssl', 'pdo_sqlite', 'zip'];
+
     public function handle(ToolRunner $tools, DnsResolver $dns, TlsInspector $tls): int
     {
+        $missing = self::missingExtensions();
+
+        if ($missing !== []) {
+            $ini = php_ini_loaded_file();
+            $this->components->error('Ekstensi PHP belum aktif: '.implode(', ', $missing).'.');
+            $this->line($ini === false
+                ? '  Belum ada php.ini. Di folder '.dirname(PHP_BINARY).', salin php.ini-development menjadi php.ini, lalu aktifkan ekstensinya.'
+                : "  Buka {$ini}, hapus tanda ; di depan baris ".implode(', ', array_map(fn (string $extension) => "extension={$extension}", $missing)).'.');
+            $this->line('  Setelah itu jalankan perintah ini lagi. Lihat PANDUAN.md bagian Memasang PHP.');
+
+            return self::FAILURE;
+        }
+
         if (! File::exists(base_path('.env'))) {
             File::copy(base_path('.env.example'), base_path('.env'));
             $this->components->info('File .env dibuat dari .env.example.');
@@ -65,9 +84,20 @@ class SiprikaInstall extends Command
         $this->components->twoColumnDetail('Uji verifikasi sertifikat TLS', $this->tlsSelfTest($dns, $tls));
 
         $this->newLine();
-        $this->components->info('Selesai. Jalankan: php artisan siprika:serve');
+        $this->components->info('Selesai. Jalankan SIPRIKA dengan klik dua kali jalankan-siprika.bat (atau php artisan siprika:serve). Panduan lengkap: PANDUAN.md');
 
         return self::SUCCESS;
+    }
+
+    /**
+     * @param  (callable(string): bool)|null  $isLoaded  pengganti extension_loaded untuk test
+     * @return list<string>
+     */
+    public static function missingExtensions(?callable $isLoaded = null): array
+    {
+        $isLoaded ??= extension_loaded(...);
+
+        return array_values(array_filter(self::REQUIRED_EXTENSIONS, fn (string $extension) => ! $isLoaded($extension)));
     }
 
     /**

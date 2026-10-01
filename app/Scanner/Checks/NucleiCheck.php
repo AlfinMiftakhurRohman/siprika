@@ -256,7 +256,9 @@ class NucleiCheck extends ExternalToolCheck implements BackgroundCheck
         // Sudah diulang: sisa kegagalan kecil hanya dicatat, kegagalan besar membuat hasil Nuclei tidak lengkap (ERROR)
         if ($this->pending['retried']) {
             if ($wholeRun || $failed >= $config['max_failed_requests']) {
-                $this->pending['problem'] = "Website membatasi atau kewalahan menerima request Nuclei ({$reason} pada {$rate} request per detik, setelah diulang), sehingga hasil Nuclei mungkin tidak lengkap.";
+                $this->pending['problem'] = $this->connectionLost($context)
+                    ? "Koneksi internet laptop terputus saat Nuclei berjalan ({$reason} pada {$rate} request per detik, setelah diulang), sehingga hasil Nuclei tidak lengkap."
+                    : "Website membatasi atau kewalahan menerima request Nuclei ({$reason} pada {$rate} request per detik, setelah diulang), sehingga hasil Nuclei mungkin tidak lengkap.";
             } else {
                 $this->pending['notes'][] = "{$failed} request tetap gagal setelah diulang.";
             }
@@ -274,7 +276,9 @@ class NucleiCheck extends ExternalToolCheck implements BackgroundCheck
             $stillBlocked = $blocked !== null ? $this->blockedAfterRun($context) : null;
 
             if ($stillBlocked !== null) {
-                $this->pending['problem'] = "Website memblokir request Nuclei ({$blocked} pada {$rate} request per detik) dan masih memblokir setelah jeda {$config['retry_cooldown']} detik, sehingga Nuclei tidak dilanjutkan dan hasilnya mungkin tidak lengkap.";
+                $this->pending['problem'] = $this->connectionLost($context)
+                    ? "Koneksi internet laptop terputus saat Nuclei berjalan ({$blocked}), sehingga Nuclei tidak dilanjutkan dan hasilnya tidak lengkap."
+                    : "Website memblokir request Nuclei ({$blocked} pada {$rate} request per detik) dan masih memblokir setelah jeda {$config['retry_cooldown']} detik, sehingga Nuclei tidak dilanjutkan dan hasilnya mungkin tidak lengkap.";
                 $this->pending['stopped'] = true;
 
                 return false;
